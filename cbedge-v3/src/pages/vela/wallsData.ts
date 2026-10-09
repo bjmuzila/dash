@@ -15,7 +15,7 @@
 // fill, the 09:29–16:00 session, broken captures, the futures basis).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { query } from '@/data/api'
+import { forgetQueries, query } from '@/data/api'
 import { BASIS_URL, ES_MAX_BASIS, isPlausibleBasis, parseBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { futuresPairFor } from '@/board/gexCandles/futures'
 import { RTH_CLOSE_MIN, etMinutesOfDay } from '@/board/gexCandles/candles'
@@ -58,13 +58,26 @@ export function loadWalls(symbol: string, s: WallsRead, fresh: boolean): Promise
   const url = wallsUrl(symbol, s)
   const hit = reads.get(url)
   if (hit && (!fresh || Date.now() - hit.at < SHARED_MS)) return hit.p
-  const p = fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+  // A failed read (the server restarting, a 502) is NOT kept: the next read asks
+  // again instead of serving "no walls" until something forces a fresh one
+  // (2026-10-09, Brandon: the Path stayed empty after a server restart until
+  // he pressed Refresh). A read that answered, even with no days, is kept.
+  const drop = () => {
+    if (reads.get(url)?.p === p) reads.delete(url)
+  }
+  const p: Promise<DaySlice[]> = fetch(url, { cache: 'no-store', credentials: 'same-origin' })
     .then((r) => (r.ok ? r.json() : null))
     .then((j: { ok?: boolean; days?: unknown[] } | null) => {
-      if (!j?.ok || !Array.isArray(j.days)) return []
+      if (!j?.ok || !Array.isArray(j.days)) {
+        drop()
+        return []
+      }
       return j.days.map((d) => rangeDayToSlice(d)).filter((d): d is DaySlice => d != null)
     })
-    .catch(() => [] as DaySlice[])
+    .catch(() => {
+      drop()
+      return [] as DaySlice[]
+    })
   reads.set(url, { at: Date.now(), p })
   return p
 }
@@ -84,7 +97,12 @@ export async function loadBasis(fut: 'ES' | 'NQ'): Promise<BasisModel> {
   const url = pair?.basisUrl ?? BASIS_URL
   const max = pair?.maxBasis ?? ES_MAX_BASIS
   try {
-    return parseBasis(await query<unknown>(url, { staleMs: BASIS_STALE_MS }), max)
+    const model = parseBasis(await query<unknown>(url, { staleMs: BASIS_STALE_MS }), max)
+    // An answer with no usable basis ({ basis: null } while the server warms up
+    // after a restart) is not held for ten minutes: every ES / NQ level is shifted
+    // by it, so the next read asks again (2026-10-09).
+    if (!isPlausibleBasis(model.basis, max) && model.days.size === 0) forgetQueries((u) => u === url)
+    return model
   } catch {
     return parseBasis(null, max)
   }

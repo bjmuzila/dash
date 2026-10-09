@@ -12,10 +12,9 @@
 //
 // FIVE THINGS THAT ARE NOT OBVIOUS
 //
-//   1. 0DTE IS THE TRIGGER, NOT A VOTE (by default). The shared wall `k` is
-//      picked from the LATER expiries only. 0DTE joining it is what moves a
-//      ticker from PENDING to LOCKED. With `zeroTrigger` off, 0DTE votes like
-//      the rest and there is no PENDING state.
+//   1. 0DTE IS THE TRIGGER, NEVER A VOTE. The shared wall `k` is picked from
+//      the LATER expiries only, and 0DTE has to sit EXACTLY on it to LOCK —
+//      tolerance never applies to 0DTE. See evaluate().
 //   2. THE EXPIRIES ARE WHATEVER THE RECORDER KEEPS. strike_growth stores the
 //      front STRIKE_GROWTH_EXPIRIES (3 by default) per ticker, so "the next
 //      3–5" is 3 until that env var — and the live feed's
@@ -112,6 +111,7 @@ export interface AlignSettings {
   minDom: number
   /** A wall move counts only after the new strike holds this many minutes. */
   holdMin: number
+  /** Retired 2026-10-08 (0DTE is always the trigger). Kept so old saves parse. */
   zeroTrigger: boolean
   /** Only show tickers whose ALL ex-0DTE wall is on the shared wall too. */
   requireAll: boolean
@@ -206,41 +206,59 @@ export function tolAbs(step: number, tol: 0 | 1): number {
 }
 
 /**
- * Score one snapshot of walls (index 0 = front). `nets` breaks ties toward the
- * heavier candidate; it may be omitted (history replay has strikes only).
+ * Score one snapshot of walls (index 0 = front / 0DTE).
+ *
+ * THE RULE (2026-10-08, after MSFT showed LOCK with 0DTE on 527.5 and every
+ * later expiry on 530):
+ *   · The shared wall k comes from the LATER expiries only. 0DTE never picks it.
+ *   · Tolerance (±1 strike) only lets later expiries count as agreeing with k.
+ *     It never moves k — k is always a strike a later expiry actually sits on,
+ *     the one most of them sit on EXACTLY.
+ *   · 0DTE must be EXACTLY on k to LOCK. One strike off is still PENDING —
+ *     0DTE stepping onto the wall is the whole event.
+ *   · LOCKED  = enough later expiries on k (all of them with two, all but one
+ *               with three or more) AND 0DTE exactly on k.
+ *     PENDING = the same later-expiry agreement, 0DTE not on k.
+ *     FORMING = any two walls on one strike, short of the above.
+ * `zeroTrigger` is no longer read: "0DTE votes like the rest" is what made a
+ * 2-of-3 with 0DTE elsewhere read as LOCKED.
+ * `nets` breaks ties toward the heavier candidate; it may be omitted.
  */
 export function evaluate(
   walls: ReadonlyArray<number | null>,
   step: number,
-  settings: Pick<AlignSettings, 'tol' | 'zeroTrigger'>,
+  settings: Pick<AlignSettings, 'tol'> & Partial<Pick<AlignSettings, 'zeroTrigger'>>,
   nets?: ReadonlyArray<number>,
 ): Verdict {
   const n = walls.length
   const slack = tolAbs(step, settings.tol)
+  const exact = tolAbs(step, 0)
   const voterIdx: number[] = []
-  for (let i = settings.zeroTrigger ? 1 : 0; i < n; i++) voterIdx.push(i)
+  for (let i = 1; i < n; i++) voterIdx.push(i)
   const front = walls[0] ?? null
 
-  let best: { k: number; count: number; frontOn: boolean; weight: number } | null = null
+  let best: { k: number; count: number; exactCount: number; frontOn: boolean; weight: number } | null = null
   for (const vi of voterIdx) {
     const c = walls[vi]
     if (c == null) continue
     let count = 0
+    let exactCount = 0
     let weight = 0
     for (const vj of voterIdx) {
       if (near(walls[vj], c, slack)) {
         count++
         weight += Math.abs(nets?.[vj] ?? 0)
       }
+      if (near(walls[vj], c, exact)) exactCount++
     }
-    const frontOn = near(front, c, slack)
+    const frontOn = near(front, c, exact)
     const better =
       !best ||
       count > best.count ||
-      (count === best.count && frontOn && !best.frontOn) ||
-      (count === best.count && frontOn === best.frontOn && weight > best.weight) ||
-      (count === best.count && frontOn === best.frontOn && weight === best.weight && c < best.k)
-    if (better) best = { k: c, count, frontOn, weight }
+      (count === best.count && exactCount > best.exactCount) ||
+      (count === best.count && exactCount === best.exactCount && frontOn && !best.frontOn) ||
+      (count === best.count && exactCount === best.exactCount && frontOn === best.frontOn && weight > best.weight)
+    if (better) best = { k: c, count, exactCount, frontOn, weight }
   }
 
   const empty: Verdict = {
@@ -252,27 +270,32 @@ export function evaluate(
     frontOn: false,
     total: 0,
   }
-  if (!best || n < 2) return empty
+
+  // Nothing to vote with (one recorded expiry, or the later ones blank): the
+  // most two walls can do is agree.
+  if (!best || n < 2) {
+    const ks = walls.filter((w): w is number => w != null)
+    const dup = ks.find((w, i) => ks.findIndex((x) => near(x, w, exact)) !== i)
+    if (dup == null) return empty
+    const on = walls.map((w) => near(w, dup, exact))
+    return { state: 'FORMING', k: dup, on, votesOn: 0, votes: voterIdx.length, frontOn: on[0] ?? false, total: on.filter(Boolean).length }
+  }
 
   const k = best.k
-  const on = walls.map((w) => near(w, k, slack))
+  const on = walls.map((w, i) => (i === 0 ? near(w, k, exact) : near(w, k, slack)))
   const total = on.filter(Boolean).length
   const frontOn = on[0] ?? false
   const votesOn = best.count
   const votes = voterIdx.length
-  const req = need(votes)
+  const agreed = votesOn >= need(votes) && votesOn >= 1
 
   let state: AlignState
-  if (settings.zeroTrigger) {
-    if (votesOn >= req && votesOn >= 1 && frontOn) state = 'LOCKED'
-    else if (votesOn >= req && votesOn >= 1) state = 'PENDING'
-    else if (total >= 2) state = 'FORMING'
-    else state = 'SCATTERED'
-  } else if (votesOn >= req && votes >= 2) state = 'LOCKED'
+  if (agreed && frontOn) state = 'LOCKED'
+  else if (agreed && votes >= 1) state = votes === 1 && !frontOn ? 'SCATTERED' : 'PENDING'
   else if (total >= 2) state = 'FORMING'
   else state = 'SCATTERED'
 
-  if (state === 'SCATTERED') return { ...empty, k: null }
+  if (state === 'SCATTERED') return empty
   return { state, k, on, votesOn, votes, frontOn, total }
 }
 

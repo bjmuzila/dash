@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>CB Edge</title>
+<!--
+  Served by the edge container (deploy/edge/nginx.conf.template) ONLY while the
+  dashboard container is restarting during a deploy (~10s). It looks like a slow
+  page load on purpose: same background as the app, a quiet spinner, no error
+  wording. It polls /proxy/health and reloads the exact same URL the moment the
+  dashboard answers again. Self-contained: no external fonts, scripts or images,
+  because nothing behind the edge is reachable while this is showing.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #05060a; color: #ffffff;
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; }
+  .spin { width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid rgba(33, 158, 188, 0.2); border-top-color: #219ebc;
+    animation: s 0.8s linear infinite; }
+  .msg { opacity: 0.55; font-size: 13px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+</style>
+</head>
+<body>
+<div class="wrap" role="status" aria-live="polite">
+  <div class="spin" aria-hidden="true"></div>
+  <div class="msg">Loading&hellip;</div>
+</div>
+<script>
+(function () {
+  var started = Date.now();
+  function tick() {
+    fetch('/proxy/health', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { if (r.ok) { location.reload(); } else { later(); } })
+      .catch(later);
+  }
+  function later() {
+    // Normal deploys are ~10s. If it is somehow still down after 2 minutes,
+    // keep trying, just less often, so a real outage does not hammer the box.
+    setTimeout(tick, Date.now() - started > 120000 ? 10000 : 1000);
+  }
+  setTimeout(tick, 1000);
+})();
+</script>
+</body>
+</html>

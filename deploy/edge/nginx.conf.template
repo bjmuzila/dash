@@ -1,0 +1,114 @@
+# edge — the always-on front door for cbedge.net (added 2026-10-09).
+#
+#   cloudflared  ->  edge (127.0.0.1:8095, this file)  ->  dashboard (127.0.0.1:${APP_PORT})
+#
+# WHY IT EXISTS. Every deploy recreates the dashboard container, and for ~10s
+# nothing listens on its port, so Cloudflare showed a bare 502. Open tabs could
+# also go white after a deploy: Vite names chunks by content hash and the new
+# build deletes the old files, so a tab still running the previous bundle got a
+# 404 the next time it lazy-loaded a page. This container never restarts on a
+# deploy (its image and config don't change), so it can cover both:
+#
+#   1. Hashed build assets (/app/assets, /v3/assets, /home3/assets,
+#      /_next/static) are kept in a local cache for 30 days. Their bytes can
+#      never change at a given URL, so this is always safe, and it means a tab
+#      opened before a deploy keeps loading its OWN build's chunks after it.
+#   2. While the dashboard is down, a page load gets holding.html (looks like a
+#      slow load, polls /proxy/health, reloads itself when the site is back)
+#      and an API call gets a short 503 JSON, instead of Cloudflare's 502.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: cache pages or API responses. Some pages
+# embed the signed-in user's data in the HTML (window.__SPA_SEED__, see
+# lib/serveSpaShell.ts), so a cached page could show one person's data to
+# someone else. Only content-hashed static files are cached.
+#
+# Everything else is a transparent pass-through: Host and Cloudflare's headers
+# (CF-Connecting-IP, X-Forwarded-*) reach the dashboard unchanged, websockets
+# are upgraded, and responses stream (no buffering, so SSE keeps working).
+#
+# EDITING: this is an nginx official-image template — ${APP_PORT} is filled in
+# from the container env at start. Nginx's own $variables are left alone. After
+# changing this file run:  docker compose up -d --force-recreate edge
+# (a plain `up -d` does NOT notice a changed bind-mounted file).
+
+proxy_cache_path /var/cache/nginx/edge-assets levels=1:2 keys_zone=edge_assets:20m
+                 max_size=2g inactive=30d use_temp_path=off;
+
+map $http_upgrade $edge_connection {
+  default upgrade;
+  ''      '';
+}
+
+server {
+  listen 127.0.0.1:8095;
+  server_name _;
+  server_tokens off;
+
+  # Uploads (client sites, TPO screenshots) and big Supabase auth cookies must
+  # behave exactly as they did when cloudflared talked to the dashboard directly.
+  client_max_body_size 500m;
+  proxy_request_buffering off;
+  large_client_header_buffers 8 64k;
+  proxy_buffer_size 64k;
+  proxy_buffers 16 64k;
+
+  proxy_http_version 1.1;
+  proxy_set_header Host $http_host;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection $edge_connection;
+  proxy_redirect off;
+  proxy_connect_timeout 3s;
+  proxy_read_timeout 1d;
+  proxy_send_timeout 1d;
+
+  # Only errors NGINX generates (dashboard not listening / timed out) land here.
+  # The dashboard's own 502/503 responses pass through untouched, because
+  # proxy_intercept_errors stays off.
+  error_page 502 504 =503 @down;
+
+  # Hashed static assets: cached, and served from cache even if the dashboard
+  # is down or the file was deleted by a newer build (that is the point).
+  location ~ ^/(app|v3|home3)/assets/ {
+    proxy_pass http://127.0.0.1:${APP_PORT};
+    proxy_cache edge_assets;
+    proxy_cache_key $host$uri;
+    proxy_cache_valid 200 30d;
+    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+    proxy_cache_lock on;
+    add_header X-Edge-Cache $upstream_cache_status always;
+  }
+  location ^~ /_next/static/ {
+    proxy_pass http://127.0.0.1:${APP_PORT};
+    proxy_cache edge_assets;
+    proxy_cache_key $host$uri;
+    proxy_cache_valid 200 30d;
+    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+    proxy_cache_lock on;
+    add_header X-Edge-Cache $upstream_cache_status always;
+  }
+
+  # Everything else: straight through, streamed.
+  location / {
+    proxy_pass http://127.0.0.1:${APP_PORT};
+    proxy_buffering off;
+  }
+
+  # Dashboard unreachable. A browser navigation gets the holding page; anything
+  # else (fetch/XHR, health checks, bots) gets a short JSON 503 it can retry.
+  location @down {
+    add_header Cache-Control "no-store" always;
+    add_header Retry-After "2" always;
+    if ($http_accept ~* "text/html") {
+      rewrite ^ /__edge/holding.html last;
+    }
+    default_type application/json;
+    return 503 '{"ok":false,"error":"restarting","retryAfter":2}';
+  }
+  location = /__edge/holding.html {
+    internal;
+    root /usr/share/nginx/edge;
+    rewrite ^ /holding.html break;
+    add_header Cache-Control "no-store" always;
+    add_header Retry-After "2" always;
+  }
+}

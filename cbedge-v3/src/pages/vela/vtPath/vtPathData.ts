@@ -219,7 +219,7 @@ const abs = (w: Write | null | undefined) => (w?.gex != null && Number.isFinite(
  * switch), Surge the biggest VOLUME GEX whatever the book, every strike moved by
  * the rail's basis. null: no column yet, or no basis.
  */
-function ladderFrame(
+export function ladderFrame(
   night: readonly GexColumn[],
   bar: OHLCV,
   tfMs: number,

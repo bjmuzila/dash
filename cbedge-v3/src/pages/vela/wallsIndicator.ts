@@ -67,10 +67,41 @@
 // usable basis nothing is drawn, because an unshifted SPX strike on an ES chart
 // is a level one basis below where it belongs.
 //
+// ── Futures overnight (2026-10-09) ───────────────────────────────────────────
+// Brandon: "all indicators for voltick category should show es overnight or
+// globex session. path is right. voltick walls isn't showing overnight". The
+// walls_log is written 09:29–16:00 only, so an ES / NQ candle outside it used to
+// draw nothing. It now reads what the Voltick Path reads there
+// (vtPath/vtPathData.ts framesFromWalls), so the two line up all night:
+//   · where the NEXT expiry's per-minute ladder was recorded after the close
+//     (studies/ladder.ts loadNextExpiryColumns — the GEX Rail's overnight read),
+//     ★ Volt / ◆ Coil / ↘ Reversal come from that ladder at the candle's end, by
+//     the Voltick definition on the page's GEX book, moved by the basis
+//     (ladderFrame). 0DTE only: that ladder is the nearest expiry.
+//   · anywhere else (an older night, Non-0DTE, a gap before the first column) the
+//     walls the last cash session CLOSED on carry through — after 16:00 that
+//     day's, before 09:29 the session before (Friday's through the weekend).
+// While Globex trades the nights are re-read once a minute (the walls_log only
+// in session). Cash charts are unchanged: they have no overnight candles. CB
+// Script's cbedge.call_wall / put_wall / core (wallSeriesFor) stay session-only,
+// so a strategy's backtest does not change under it.
+//
 // ── Opacity ──────────────────────────────────────────────────────────────────
 // Every line (and every per-bar colour) is drawn at the shared walls opacity —
 // pages/vela/wallsOpacity.ts (the legend card's level ⚙ on the desktop; ⋮ → Walls
 // opacity on a phone). A change repaints the lines already computed; it never refetches.
+//
+// ── Style, in the study's own settings (2026-10-09) ──────────────────────────
+// Brandon: "have the indicator settings with a continuous line option (on/off),
+// transparency filter option, thickness option". Three inputs, saved with the
+// chart like any other, each a repaint only:
+//   · Continuous line — off (default) draws each strike as a flat run with no
+//     vertical between runs (see No risers below); on draws each level as one
+//     stepped line, the vertical joining a move to the next strike.
+//   · Transparency % — fades this chart's lines further, on top of the shared
+//     opacity above: 0 is the slider's strength, 90 nearly gone.
+//   · Thickness — the Coil / Reversal (and wall) stroke in px; the Volt (and
+//     CORE) is drawn that plus 0.4, the migration chart's 1.8 / 2.2 at default.
 //
 // ── The legend card ──────────────────────────────────────────────────────────
 // On the desktop each chart's legend card (legend/legendCard.ts) is this study's
@@ -117,6 +148,10 @@ import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import { onWallsOpacity, wallsOpacity } from '@/pages/vela/wallsOpacity'
 import { gexBasis, onGexBasis, type GexBasis } from '@/pages/vela/gexBasis'
 import { isDailyOrAbove } from '@/pages/vela/timeframes'
+import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
+import type { GexColumn } from '@/board/gexCandles/gexHistory'
+import { loadNextExpiryColumns } from '@/pages/vela/studies/ladder'
+import { ladderFrame } from '@/pages/vela/vtPath/vtPathData'
 
 /** The native-indicator type id — also what the saved workspace records. */
 export const WALLS_TYPE = 'cbedge-walls'
@@ -133,9 +168,10 @@ const VIEW_OPTS = ['Walls + Core', 'Walls only', 'Core only'] as const
 const SCOPE_OPTS = ['0DTE', 'Non-0DTE'] as const
 // No GEX input (2026-10-07): the book is the page's one GEX switch (gexBasis.ts).
 
-/** The migration chart's two stroke weights. */
-const CORE_W = 2.2
+/** The migration chart's two stroke weights: the wall's is the Thickness input's default, CORE's is that + CORE_EXTRA. */
 const WALL_W = 1.8
+const CORE_EXTRA = 0.4
+const STYLE = 'Style'
 
 function inputsSchema(): InputSchema[] {
   return [
@@ -163,6 +199,37 @@ function inputsSchema(): InputSchema[] {
     { key: 'showVolt', title: 'Volt', type: 'bool', defval: true, tooltip: 'Draw the Volt line.' },
     { key: 'showCoil', title: 'Coil', type: 'bool', defval: true, tooltip: 'Draw the Coil line.' },
     { key: 'showRev', title: 'Reversal', type: 'bool', defval: true, tooltip: 'Draw the Reversal line.' },
+    // Style (2026-10-09): repaint only, never a re-read
+    {
+      key: 'continuous',
+      title: 'Continuous line',
+      type: 'bool',
+      defval: false,
+      group: STYLE,
+      tooltip: 'On: each level is one stepped line, with a vertical where it moves to a new strike. Off: flat runs only.',
+    },
+    {
+      key: 'transparency',
+      title: 'Transparency %',
+      type: 'int',
+      defval: 0,
+      min: 0,
+      max: 90,
+      step: 5,
+      group: STYLE,
+      tooltip: 'Fades this chart’s lines: 0 is full strength (the walls opacity slider), 90 is nearly see-through.',
+    },
+    {
+      key: 'width',
+      title: 'Thickness',
+      type: 'float',
+      defval: WALL_W,
+      min: 0.5,
+      max: 6,
+      step: 0.1,
+      group: STYLE,
+      tooltip: 'Line thickness in px. The Volt is drawn a little heavier (this + 0.4).',
+    },
   ]
 }
 
@@ -179,6 +246,25 @@ interface Settings {
   scope: '0dte' | 'agg'
   basis: GexBasis
   sessions: number
+}
+
+/** How the lines are painted: the Style inputs. */
+interface Look {
+  continuous: boolean
+  /** 0.1..1, multiplied into the shared walls opacity. */
+  alpha: number
+  wallW: number
+  coreW: number
+}
+
+function lookOf(inputs: Record<string, InputValue>): Look {
+  const w = typeof inputs.width === 'number' && Number.isFinite(inputs.width) ? Math.max(0.5, Math.min(6, inputs.width)) : WALL_W
+  return {
+    continuous: inputs.continuous === true,
+    alpha: 1 - int(inputs.transparency, 0, 0, 90) / 100,
+    wallW: w,
+    coreW: w + CORE_EXTRA,
+  }
 }
 
 function settingsOf(inputs: Record<string, InputValue>): Settings {
@@ -263,12 +349,14 @@ interface Aligned {
 
 /**
  * Bar-aligned values per source level. Intraday: the strike in force at the
- * bar's END, for bars that START inside 09:29–16:00 on a recorded session.
- * Daily and coarser: the level that session closed on (the newest session
- * inside the bar).
+ * bar's END, for bars that START inside 09:29–16:00 on a recorded session; on a
+ * future (`fut`), every other intraday bar carries the walls the last recorded
+ * session CLOSED on (see Futures overnight). Daily and coarser: the level that
+ * session closed on (the newest session inside the bar).
  */
-function alignToBars(bars: readonly OHLCV[], tfMs: number, days: DayModel[]): Aligned {
+function alignToBars(bars: readonly OHLCV[], tfMs: number, days: DayModel[], fut = false): Aligned {
   const byDate = new Map(days.map((d) => [d.date, d]))
+  const dates = days.map((d) => d.date).sort()
   const levels = new Map<SourceLevel, (number | null)[]>()
   for (const lt of SOURCE_LEVELS) levels.set(lt, new Array<number | null>(bars.length).fill(null))
   const coreGex = new Array<number | null>(bars.length).fill(null)
@@ -298,13 +386,68 @@ function alignToBars(bars: readonly OHLCV[], tfMs: number, days: DayModel[]): Al
       continue
     }
     const m = etMinutesOfDay(bar.time)
-    if (m < SESSION_FROM_MIN || m >= RTH_CLOSE_MIN) continue
+    if (m < SESSION_FROM_MIN || m >= RTH_CLOSE_MIN) {
+      if (!fut) continue
+      // OVERNIGHT ON A FUTURE: the last cash session's closing walls — that day's
+      // after 16:00, the session before ahead of 09:29
+      const day = byDate.get(latestBefore(dates, etDateKey(bar.time), m >= RTH_CLOSE_MIN) ?? '')
+      if (!day) continue
+      for (const lt of SOURCE_LEVELS) put(i, lt, heldAt(day.levels.get(lt), day.close + 1))
+      continue
+    }
     const day = byDate.get(etDateKey(bar.time))
     if (!day) continue
     const end = Math.min(bar.time + tfMs, day.close + 1)
     for (const lt of SOURCE_LEVELS) put(i, lt, heldAt(day.levels.get(lt), end))
   }
   return { levels, coreGex }
+}
+
+/** The newest date in `dates` (sorted, oldest first) before `key` — or on it, `inclusive`. */
+function latestBefore(dates: readonly string[], key: string, inclusive: boolean): string | undefined {
+  let hit: string | undefined
+  for (const d of dates) {
+    if (inclusive ? d <= key : d < key) hit = d
+    else break
+  }
+  return hit
+}
+
+/** The Voltick levels a futures night's ladder gives one bar. */
+interface NightVt {
+  volt: number | null
+  coil: number | null
+  reversal: number | null
+}
+
+/**
+ * Per bar of a future's overnight: ★ / ◆ / ↘ off the next expiry's per-minute
+ * ladder at the bar's end, exactly the Voltick Path's read (vtPathData.ts
+ * ladderFrame). Null where the bar is in session, or that night has no column yet.
+ */
+function nightLevels(
+  bars: readonly OHLCV[],
+  tfMs: number,
+  days: DayModel[],
+  nights: Map<string, GexColumn[]>,
+  shiftAt: (ts: number) => number | null,
+  book: GexBasis,
+): (NightVt | null)[] {
+  const out = new Array<NightVt | null>(bars.length).fill(null)
+  if (!nights.size || tfMs >= DAY_MS) return out
+  const dates = days.map((d) => d.date).sort()
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i]
+    if (!bar) continue
+    const m = etMinutesOfDay(bar.time)
+    if (m >= SESSION_FROM_MIN && m < RTH_CLOSE_MIN) continue
+    const date = latestBefore(dates, etDateKey(bar.time), m >= RTH_CLOSE_MIN)
+    const night = date != null ? nights.get(date) : undefined
+    if (!night?.length) continue
+    const f = ladderFrame(night, bar, tfMs, shiftAt, book)
+    if (f) out[i] = { volt: f.volt, coil: f.gates[0] ?? null, reversal: f.rev }
+  }
+  return out
 }
 
 /**
@@ -330,7 +473,8 @@ export async function wallSeriesFor(
     loadWalls(wallsSymbol, { scope: '0dte', basis: gexBasis(), sessions }, fresh),
     sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
   ])
-  const al = alignToBars(bars, tfMs, buildDays(slices, basis))
+  // session-only on purpose (no overnight carry): a script's backtest stays as it was
+  const al = alignToBars(bars, tfMs, buildDays(slices, basis), false)
   const arr = (xs: (number | null)[] | undefined) => {
     const out = new Float64Array(bars.length).fill(NaN)
     xs?.forEach((v, i) => {
@@ -390,12 +534,15 @@ function runLanes(values: readonly (number | null)[]): { lanes: (number | null)[
   return { lanes, src }
 }
 
-function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings): Line[] {
+function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings, look: Look, night: readonly (NightVt | null)[] = []): Line[] {
   const cw = al.levels.get('call_wall') ?? []
   const pw = al.levels.get('put_wall') ?? []
   const cb = al.levels.get('cb') ?? []
-  // At the slider's opacity — the per-bar colours below are these same strings.
-  const a = wallsOpacity()
+  // At the slider's opacity, faded by this study's Transparency — the per-bar
+  // colours below are these same strings.
+  const a = Math.max(0.02, wallsOpacity() * look.alpha)
+  const CORE_W = look.coreW
+  const WALL_W = look.wallW
   const callC = tokenHexAlpha('--color-candle-up', a)
   const putC = tokenHexAlpha('--color-level-pw', a)
   const coreC = tokenHexAlpha('--color-level-cb', a)
@@ -407,7 +554,8 @@ function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings): Line[] {
     const coil: (number | null)[] = []
     const rev: (number | null)[] = []
     for (let i = 0; i < bars.length; i++) {
-      const vt = vtFromWalls(cb[i], cw[i], pw[i], bars[i]?.close)
+      // a future's overnight bar with a ladder column: the Path's levels (header)
+      const vt = night[i] ?? vtFromWalls(cb[i], cw[i], pw[i], bars[i]?.close)
       volt.push(vt.volt)
       coil.push(vt.coil)
       rev.push(vt.reversal)
@@ -487,6 +635,10 @@ class WallsIndicator implements NativeIndicator {
   private ctx: NativeIndicatorContext | null = null
   private inputs: Record<string, InputValue> = {}
   private days: DayModel[] = []
+  /** A future's nights (date → the next expiry's columns after that close) and its basis. */
+  private nights = new Map<string, GexColumn[]>()
+  private basisModel: BasisModel | null = null
+  private fut = false
   private timer: ReturnType<typeof setInterval> | null = null
   private epoch = 0
   private lastKey = ''
@@ -571,13 +723,35 @@ class WallsIndicator implements NativeIndicator {
     const sym = resolveSym(ctx.symbol.replace(/^[^:]*:/, ''))
     const wallsSymbol = sym.fut === 'NQ' ? 'NDX' : sym.fut === 'ES' ? 'SPX' : sym.key
     if (!this.days.length) ctx.setStatus('loading')
+    // the walls_log only moves in session; a futures night re-reads its ladder alone
     const [days, basis] = await Promise.all([
-      loadWalls(wallsSymbol, s, fresh),
+      loadWalls(wallsSymbol, s, fresh && inSession()),
       sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
     ])
     if (my !== this.epoch || this.stopped || this.ctx !== ctx) return
     this.days = buildDays(days, basis)
+    this.fut = !!sym.fut
+    this.basisModel = basis
+    // FUTURES OVERNIGHT (header): the nights after the two newest recorded
+    // sessions, as the Path reads them. 0DTE only — that ladder is the nearest expiry.
+    let nights = new Map<string, GexColumn[]>()
+    if (sym.fut && s.scope === '0dte') {
+      const dates = [...new Set(this.days.map((d) => d.date))].sort().slice(-2)
+      const reads = await Promise.all(dates.map((d) => loadNextExpiryColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
+      if (my !== this.epoch || this.stopped || this.ctx !== ctx) return
+      nights = new Map(dates.map((d, k) => [d, reads[k]!]))
+    }
+    this.nights = nights
     this.render(true)
+  }
+
+  /** The index → chart shift at a time (a future's basis that day); null = no usable basis. */
+  private shiftAt = (ts: number): number | null => {
+    if (!this.fut) return 0
+    const b0 = this.basisModel
+    if (!b0) return null
+    const v = b0.days.get(etDateKey(ts)) ?? b0.basis
+    return isPlausibleBasis(v, b0.max) ? v : null
   }
 
   private render(force = false): void {
@@ -600,10 +774,12 @@ class WallsIndicator implements NativeIndicator {
     if (!force && !this.days.length) return
     const s = settingsOf(this.inputs)
     const tfMs = timeframeToMs(ctx.timeframe)
-    const aligned = alignToBars(bars, tfMs, this.days)
+    const aligned = alignToBars(bars, tfMs, this.days, this.fut)
+    const night = this.fut ? nightLevels(bars, tfMs, this.days, this.nights, this.shiftAt, s.basis) : []
+    const look = lookOf(this.inputs)
     // A level with nothing to draw on these bars gets no series at all, so a
     // ticker the recorder does not cover shows a quiet legend row.
-    const all = linesFor(bars, aligned, s)
+    const all = linesFor(bars, aligned, s, look, night)
     // the legend card's NOW: every Voltick line, drawn or switched off
     const byKey = (k: string) => {
       const l = all.find((x) => x.key === k)
@@ -616,6 +792,23 @@ class WallsIndicator implements NativeIndicator {
     const series: SeriesSpec[] = []
     const style = (line: Line) => ({ color: line.color, width: line.width, lineStyle: 'solid' as const })
     lines.forEach((line, ordinal) => {
+      // CONTINUOUS LINE (the Style input): the readout below is the paint — one
+      // stepped line, its verticals included
+      if (look.continuous) {
+        series.push({
+          id: stableSeriesId({ instanceId: WALLS_TYPE, kind: 'step', title: line.key, ordinal }),
+          title: line.title,
+          paneId: '',
+          kind: 'step' as const,
+          points: bars.map((b, i) => {
+            const c = line.colors?.[i]
+            return c ? { time: b.time, value: line.values[i] ?? null, color: c } : { time: b.time, value: line.values[i] ?? null }
+          }),
+          style: style(line),
+          display: { pane: true, priceScale: false, legend: true, dataWindow: true },
+        })
+        return
+      }
       // the paint: one series per lane, so no riser (see runLanes)
       const { lanes, src } = runLanes(line.values)
       lanes.forEach((vals, l) => {
@@ -658,8 +851,9 @@ class WallsIndicator implements NativeIndicator {
     this.disarm()
     if (!this.ctx?.live) return
     this.timer = setInterval(() => {
-      if (document.hidden || !inSession()) return
-      void this.load(true)
+      if (document.hidden) return
+      // in session: the walls_log; a future's Globex night: its ladder (load)
+      if (inSession() || (this.fut && globexOpen())) void this.load(true)
     }, REFRESH_MS)
   }
 
@@ -676,6 +870,17 @@ function inSession(): boolean {
   if (wd === 0 || wd === 6) return false
   const m = etMinutesOfDay(now)
   return m >= SESSION_FROM_MIN - 5 && m <= RTH_CLOSE_MIN + 5
+}
+
+/** CME Globex is trading: Sunday 18:00 ET to Friday 17:00, less the daily 17:00–18:00 break. */
+function globexOpen(): boolean {
+  const now = Date.now()
+  const wd = new Date(`${etDateKey(now)}T12:00:00Z`).getUTCDay()
+  const m = etMinutesOfDay(now)
+  if (wd === 6) return false
+  if (wd === 0) return m >= 18 * 60
+  if (wd === 5 && m >= 17 * 60) return false
+  return m < 17 * 60 || m >= 18 * 60
 }
 
 let registered = false

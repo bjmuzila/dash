@@ -12,6 +12,20 @@
 //                  minute archive of each finished day — flow_netprem_archive),
 //                  and every session's lines start at 0 on the 09:30 ET open;
 //                  anything printed before the open is left out.
+//                  ES / NQ: THE GLOBEX NIGHT TOO (2026-10-09, Brandon: "net
+//                  premium for es should show spx and should show overnight but
+//                  at 9:30 open only show rth and start from 0. same with nq with
+//                  ndx"). On a futures chart each futures session is two runs:
+//                  the NIGHT from the 18:00 ET Globex open to 09:30 (SPX / NDX
+//                  prints in that window — the index options' overnight
+//                  session), from 0 at 18:00; then RTH from 0 again at 09:30, the
+//                  night left out, running on to the 17:00 futures close. The
+//                  runs are separate lines (two lanes, alternating), so the
+//                  09:30 reset is a clean break, not a drop drawn across it; a
+//                  readout series off the plot carries the whole line for the
+//                  legend and the data window. A night with no recorded prints
+//                  draws nothing. Bins are read by ET date as before (a night
+//                  spans two), merged and placed by their own minute.
 //                  ONE OR THE OTHER (2026-10-05, Brandon): "Calls and puts" on
 //                  draws the calls line and the puts line and no net line; off,
 //                  the net line alone (green above zero, red below).
@@ -35,6 +49,9 @@
 //                  counts trading days including today, so 1 is today's
 //                  session (it used to reach back to yesterday's date too), and
 //                  a Buys / sells setting shows only bought or only sold prints.
+//                  On ES / NQ a day is the futures session (2026-10-09): from
+//                  18:00 ET the evening before, so the night's SPX / NDX prints
+//                  show on the Globex candles too.
 //                  printed and the underlying's price then, sized by premium:
 //                  green bullish (calls bought, puts sold), red bearish, grey
 //                  when the side is unknown.
@@ -47,7 +64,8 @@
 
 import type { OHLCV, PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
-import { DAY_MS, barAt, bool, studyImpl, etDateKey, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
+import { DAY_MS, FUT_OPEN, RTH_OPEN, barAt, bool, studyImpl, etDateKey, etMinutesOfDay, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
+import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_ACTION, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
 import { gexBasis, gexBasisShort } from '@/pages/vela/gexBasis'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhaleContext, type WhaleCtxLine, type WhalePayload } from './whaleLayer'
@@ -130,14 +148,39 @@ interface BinFilter {
 
 const binsKey = (c: StudyCtx, s: BinFilter) => `${flowTicker(c)}|${s.sessions}|${s.otm}|${s.minPremium}`
 
+/** The ET calendar date before `date` (YYYY-MM-DD). */
+function dayBefore(date: string): string {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, (d ?? 1) - 1)).toISOString().slice(0, 10)
+}
+
+/**
+ * The ET dates whose bins a chart needs. Cash: one per session. A future: each
+ * futures session D (18:00 the evening before to 17:00) is the night of D − 1
+ * and the day of D, so both dates — never one later than today.
+ */
+function binDates(c: StudyCtx, sessions: number): string[] {
+  const today = etDateKey(Date.now())
+  if (!c.sym.fut) {
+    const dates = sessionsOf(c.bars, (x) => etDateKey(x))
+      .map((x) => x.key)
+      .slice(-sessions)
+    if (!dates.includes(today) && c.ctx.live) dates.push(today)
+    return dates
+  }
+  const keys = sessionsOf(c.bars, (x) => sessionKey(x, true))
+    .map((x) => x.key)
+    .slice(-sessions)
+  const live = sessionKey(Date.now(), true)
+  if (!keys.includes(live) && c.ctx.live) keys.push(live)
+  return [...new Set(keys.flatMap((k) => [dayBefore(k), k]))].filter((d) => d <= today).sort()
+}
+
 /** Each session's per-minute flow bins, by ET date (/proxy/flow-netprem). */
 async function loadBins(c: StudyCtx, s: BinFilter): Promise<Map<string, Bin[]>> {
   const t = flowTicker(c)
   const today = etDateKey(Date.now())
-  const dates = sessionsOf(c.bars, (x) => etDateKey(x))
-    .map((x) => x.key)
-    .slice(-s.sessions)
-  if (!dates.includes(today) && c.ctx.live) dates.push(today)
+  const dates = binDates(c, s.sessions)
   const out = new Map<string, Bin[]>()
   const urlOf = (d: string) =>
     `/proxy/flow-netprem?underlying=${encodeURIComponent(t)}&bin=60&date=${d}&minPremium=${s.minPremium}${s.otm ? '&otmOnly=1' : ''}`
@@ -215,6 +258,127 @@ function cumulate(
   return { a: outA, b: outB }
 }
 
+/**
+ * ES / NQ (see the header): two running totals per futures session — the night
+ * from 0 at the 18:00 ET Globex open to 09:30, then RTH from 0 at 09:30 to the
+ * session's end — plus each bar's run number (`seg`, consecutive runs alternate
+ * parity), so the runs draw as separate lines. Bins come from every date read,
+ * merged by minute; a bar straddling 09:30 only takes the night's bins.
+ */
+export function cumulateFut(
+  bars: readonly OHLCV[],
+  tfMs: number,
+  data: Map<string, Bin[]>,
+  a: (b: Bin) => number,
+  b: (b: Bin) => number,
+): { a: (number | null)[]; b: (number | null)[]; seg: number[] } {
+  const n = bars.length
+  const outA = new Array<number | null>(n).fill(null)
+  const outB = new Array<number | null>(n).fill(null)
+  const seg = new Array<number>(n).fill(-1)
+  // every date's bins, one per minute (a night's prints sit under two ET dates)
+  const merged = new Map<number, Bin>()
+  for (const bins of data.values()) {
+    for (const x of bins) {
+      const m = merged.get(x.sec)
+      if (m) {
+        m.callNet += x.callNet
+        m.putNet += x.putNet
+      } else merged.set(x.sec, { ...x })
+    }
+  }
+  const bins = [...merged.values()].sort((p, q) => p.sec - q.sec)
+  if (!bins.length) return { a: outA, b: outB, seg }
+  /** The first bin at or after `ms`. */
+  const firstFrom = (ms: number) => {
+    let lo = 0
+    let hi = bins.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (bins[mid]!.sec * 1000 < ms) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+  let runKey = ''
+  let run = -1
+  let segEnd = 0
+  let k = 0
+  let ca = 0
+  let cb = 0
+  let seen = false
+  for (let i = 0; i < n; i++) {
+    const t = bars[i]!.time
+    const d = sessionKey(t, true)
+    const rth = etDateKey(t) === d && etMinutesOfDay(t) >= RTH_OPEN
+    const key = `${d}|${rth ? 'r' : 'n'}`
+    if (key !== runKey) {
+      runKey = key
+      run++
+      const start = rth ? etWallMs(d, RTH_OPEN) : etWallMs(dayBefore(d), FUT_OPEN)
+      segEnd = rth ? etWallMs(d, FUT_OPEN) : etWallMs(d, RTH_OPEN)
+      k = firstFrom(start)
+      ca = 0
+      cb = 0
+      seen = false
+    }
+    const end = Math.min(t + tfMs, segEnd)
+    while (k < bins.length && bins[k]!.sec * 1000 < end) {
+      ca += a(bins[k]!)
+      cb += b(bins[k]!)
+      k++
+      seen = true
+    }
+    if (!seen) continue
+    outA[i] = ca
+    outB[i] = cb
+    seg[i] = run
+  }
+  return { a: outA, b: outB, seg }
+}
+
+/**
+ * One line drawn as runs (ES / NQ Net Premium): its values on two lanes by the
+ * run's parity, so no segment is drawn across a reset, and a readout series off
+ * the plot under the line's own id, for the legend and the data window. Only
+ * the lane holding the newest value shows its price chip.
+ */
+export function runSeries(
+  type: string,
+  key: string,
+  ordinal: number,
+  title: string,
+  bars: readonly OHLCV[],
+  values: readonly (number | null)[],
+  seg: readonly number[],
+  color: string,
+  o: { width?: number; colors?: readonly (string | null)[] } = {},
+): SeriesSpec[] {
+  let newest = -1
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (values[i] != null) {
+      newest = seg[i]! % 2
+      break
+    }
+  }
+  const out: SeriesSpec[] = []
+  for (const lane of [0, 1]) {
+    const vals = values.map((v, i) => (v != null && seg[i]! >= 0 && seg[i]! % 2 === lane ? v : null))
+    if (!vals.some((v) => v != null)) continue
+    const s = seriesOf(type, `${key}~${lane}`, 10 + ordinal * 2 + lane, title, bars, vals, color, { kind: 'line', width: o.width, colors: o.colors })
+    out.push({
+      ...s,
+      id: stableSeriesId({ instanceId: type, kind: 'line', title: `${key}~${lane}`, ordinal: 10 + ordinal * 2 + lane }),
+      display: { pane: true, priceScale: lane === newest, legend: false, dataWindow: false },
+    })
+  }
+  out.push({
+    ...seriesOf(type, key, ordinal, title, bars, values, color, { kind: 'line', width: o.width, colors: o.colors }),
+    display: { pane: false, priceScale: false, legend: true, dataWindow: true },
+  })
+  return out
+}
+
 export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
   settings: (i) => ({
     sessions: int(i.sessions, 1, 1, 7),
@@ -228,14 +392,25 @@ export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
   render: (c, s, data) => {
     const { bars, tfMs } = c
     if (!bars.length || !data || tfMs >= DAY_MS) return {}
-    const { a: calls, b: puts } = cumulate(bars, tfMs, data, (b) => b.callNet, (b) => b.putNet)
+    // ES / NQ: the night, then RTH from 0 at 09:30 (header); cash: from 0 at the open
+    const fut = !!c.sym.fut
+    const { a: calls, b: puts, seg } = fut
+      ? cumulateFut(bars, tfMs, data, (b) => b.callNet, (b) => b.putNet)
+      : { ...cumulate(bars, tfMs, data, (b) => b.callNet, (b) => b.putNet), seg: null }
     const up = tokenHexAlpha('--color-up', 1)
     const down = tokenHexAlpha('--color-down', 1)
     const net = calls.map((v, i) => (v == null ? null : v - puts[i]!))
     const netC = net.map((v) => (v == null ? null : v >= 0 ? up : down))
     const T = NETPREM_TYPE
     const series: SeriesSpec[] = []
-    if (net.some((v) => v != null)) {
+    if (seg && net.some((v) => v != null)) {
+      if (s.legs) {
+        series.push(...runSeries(T, 'calls', 1, 'Calls', bars, calls, seg, up, { width: 1.6 }))
+        series.push(...runSeries(T, 'puts', 2, 'Puts', bars, puts, seg, down, { width: 1.6 }))
+      } else {
+        series.push(...runSeries(T, 'net', 0, 'Net', bars, net, seg, up, { width: 2, colors: netC }))
+      }
+    } else if (net.some((v) => v != null)) {
       // one or the other: the calls and puts lines, or the net line, never all three
       if (s.legs) {
         series.push(seriesOf(T, 'calls', 1, 'Calls', bars, calls, up, { kind: 'line', width: 1.6 }))
@@ -268,12 +443,19 @@ interface VfPoint {
   combined: number
 }
 
-/** Today's Vol/GEX Flow series (/proxy/gex-vol-flow); one request per URL at a time, shared. */
+/**
+ * Today's Vol/GEX Flow series (/proxy/gex-vol-flow); one request per URL at a time, shared.
+ * ES / NQ (2026-10-09, Brandon: "all indicators for voltick category should show
+ * es overnight or globex session"): always `session=globex` — from 18:00 ET the
+ * evening before, so the night, the cash session and this evening all draw on the
+ * futures candles. The Session input is a cash chart's choice.
+ */
 async function readVolFlow(c: StudyCtx, front: boolean, eth: boolean, bin: number): Promise<VfPoint[]> {
   const t = flowTicker(c)
   const symbol = t === 'SPX' || t === 'NDX' || t === 'RUT' ? `$${t}` : t
+  const session = c.sym.fut ? 'globex' : eth ? 'eth' : 'rth'
   const j = await sharedJson<{ ok?: boolean; points?: Record<string, unknown>[] }>(
-    `/proxy/gex-vol-flow?bin=${bin}&session=${eth ? 'eth' : 'rth'}&scope=${front ? 'front' : 'all'}&symbol=${encodeURIComponent(symbol)}`,
+    `/proxy/gex-vol-flow?bin=${bin}&session=${session}&scope=${front ? 'front' : 'all'}&symbol=${encodeURIComponent(symbol)}`,
   )
   if (!j || j.ok === false || !Array.isArray(j.points)) return []
   return j.points
@@ -290,7 +472,7 @@ export const volFlowImpl = studyImpl<VfS, VfPoint[]>({
     oi: bool(i.oi, false),
     combined: bool(i.combined, true),
   }),
-  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${s.eth}|${s.bin}`,
+  dataKey: (c, s) => `${flowTicker(c)}|${c.sym.fut ? 'globex' : s.eth}|${s.front}|${s.bin}`,
   load: (c, s) => readVolFlow(c, s.front, s.eth, s.bin),
   refreshMs: 15_000,
   render: (c, s, pts) => {
@@ -377,7 +559,7 @@ export const netGexFlowImpl = studyImpl<NgS, VfPoint[]>({
     line: bool(i.line, true),
   }),
   // the GEX switch is not in the key: one read carries all three books, a switch only repaints
-  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${s.eth}`,
+  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${c.sym.fut ? 'globex' : s.eth}`,
   load: (c, s) => readVolFlow(c, s.front, s.eth, 60),
   refreshMs: 15_000,
   render: (c, s, pts) => {
@@ -434,7 +616,7 @@ export const netGexImpl = studyImpl<NlS, VfPoint[]>({
       cols: style !== NETGEX_STYLES[0],
     }
   },
-  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${s.eth}`,
+  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${c.sym.fut ? 'globex' : s.eth}`,
   load: (c, s) => readVolFlow(c, s.front, s.eth, 60),
   refreshMs: 15_000,
   render: (c, s, pts) => {
@@ -476,6 +658,8 @@ interface WhRow {
 interface WhData {
   rows: WhRow[]
   basis: BasisModel | null
+  /** ES / NQ: the first futures session's 18:00 ET open — prints before it are the session before's. */
+  fromMs?: number
 }
 interface WhS {
   minPremium: number
@@ -679,6 +863,7 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
     if (s.action !== 'all' && r.action !== s.action) continue
     if (!expOk(r, s.exp)) continue
     if (r.ts < first || r.ts >= lastEnd) continue
+    if (data!.fromMs != null && r.ts < data!.fromMs) continue
     const key = `${Math.floor(r.ts / 60_000)}|${biasOf(r)}`
     const g = groups.get(key)
     if (g) g.push(r)
@@ -776,8 +961,12 @@ export const whalesImpl = studyImpl<WhS, WhData>({
     const now = Date.now()
     const anchor = c.ctx.live ? now : Math.min(now, c.bars[c.bars.length - 1]?.time ?? now)
     const to = etDateKey(Math.min(now, anchor + Math.max(s.days, 5) * DAY_MS))
-    // `days` trading days counting the anchor's own: 1 = that day alone
-    const from = tradingDaysBack(etDateKey(anchor), s.days - 1)
+    // `days` trading days counting the anchor's own: 1 = that day alone. On ES / NQ
+    // a day is the futures session, which opens at 18:00 ET the evening before
+    const fut = !!c.sym.fut
+    const firstDay = tradingDaysBack(fut ? sessionKey(anchor, true) : etDateKey(anchor), s.days - 1)
+    const from = fut ? dayBefore(firstDay) : firstDay
+    const fromMs = fut ? etWallMs(from, FUT_OPEN) : undefined
     // rows_only=1: the print list alone, without the Whales page's six roll-ups
     const urlFor = (a: string, b: string) =>
       `/api/lse/whales?from=${a}&to=${b}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500&rows_only=1`
@@ -812,7 +1001,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
         spot: Number.isFinite(Number(r.spot)) && Number(r.spot) > 0 ? Number(r.spot) : null,
       }))
       .filter((r) => Number.isFinite(r.ts) && r.premium > 0)
-    return { rows, basis }
+    return { rows, basis, fromMs }
   },
   refreshMs: 60_000,
   // repaint as the forming bar moves: in a tick replay that is how a print appears

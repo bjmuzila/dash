@@ -37,7 +37,7 @@
 // session that just closed, as before.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { query } from '@/data/api'
+import { forgetQueries, query } from '@/data/api'
 import { chainAllUrl } from '@/board/chainGex'
 import { parseChain, strikeGex, todayEt } from '@/board/multiGreek/mgMath'
 import { gexHistoryDayUrl, parseGexHistory, parseGexHistoryMeta, type GexColumn } from '@/board/gexCandles/gexHistory'
@@ -101,7 +101,13 @@ async function dayRead(gexSymbol: string, date: string, expiry: string, fallback
   const url = gexHistoryDayUrl(gexSymbol, expiry, date, TOP, fallback)
   try {
     const json = await query<unknown>(url, { staleMs: today ? (fresh ? 30_000 : 60_000) : 600_000 })
-    return { columns: parseGexHistory(json), ...parseGexHistoryMeta(json, expiry) }
+    const columns = parseGexHistory(json)
+    // An EMPTY answer for today or yesterday is not held: those are the days still
+    // being written (the session, the night after it), and an empty read taken
+    // while the server restarts would otherwise blank the rail and the Path for
+    // up to ten minutes (2026-10-09). An older empty day is just empty, and kept.
+    if (!columns.length && date >= etDateKey(Date.now() - 36 * 3_600_000)) forgetQueries((u) => u === url)
+    return { columns, ...parseGexHistoryMeta(json, expiry) }
   } catch {
     return { columns: [], expiry, recorded: [] }
   }

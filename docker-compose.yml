@@ -65,6 +65,37 @@ services:
       docker-proxy:
         condition: service_started
 
+  # Always-on front door for cbedge.net (added 2026-10-09). cloudflared points
+  # cbedge.net at THIS (127.0.0.1:8095), and it passes everything through to the
+  # dashboard on APP_PORT. It exists so a deploy no longer shows a bare 502:
+  # while the dashboard container restarts (~10s) page loads get a holding page
+  # that reloads itself, and hashed JS/CSS chunks are served from a local cache
+  # so tabs opened before the deploy keep working. Full explanation and what it
+  # deliberately does NOT cache: deploy/edge/nginx.conf.template.
+  #
+  # network_mode: host so it reaches the dashboard's published loopback port
+  # exactly the way cloudflared does — no container DNS that goes stale when the
+  # dashboard is recreated. It listens on 127.0.0.1 only. The config is mounted
+  # as default.conf.template, which also REPLACES the image's stock default.conf
+  # (that one would otherwise listen on host port 80).
+  #
+  # Nothing in a normal deploy changes this service, so `up -d` leaves it
+  # running — that is the whole point. After editing its config files run:
+  #   docker compose up -d --force-recreate edge
+  #
+  # NO depends_on on the dashboard, on purpose: the edge must stay up exactly
+  # when the dashboard is down (same lesson as the theta-terminal note above).
+  edge:
+    image: nginx:alpine
+    container_name: cbedge-edge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      APP_PORT: ${APP_PORT:-3001}
+    volumes:
+      - ./deploy/edge/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/edge/holding.html:/usr/share/nginx/edge/holding.html:ro
+
   # Locked-down Docker API proxy. Lets the dashboard container (a) read
   # theta-terminal's live CPU/mem stats for the owner page and (b) RESTART
   # theta-terminal when the flow watchdog finds it wedged (state/theta-restart.js)

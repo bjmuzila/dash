@@ -38,6 +38,7 @@ import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import { TIMEFRAMES } from '@/pages/vela/timeframes'
 import '@/pages/vela/vela.css'
 import { bindTelemetry } from '@/pages/vela/telemetry'
+import { watchServerRestart } from '@/data/serverRestart'
 import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -541,6 +542,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
     // usage for owner.cbedge.net → Vela Usage: who is on, tickers, indicators, actions (vela/telemetry.ts)
     const unbindTelemetry = bindTelemetry(ws, { phone: onPhone })
+    // the server restarted: refetch the data, as the toolbar's Refresh does (data/serverRestart.ts)
+    const unwatchRestart = watchServerRestart()
     // a D / W / M load that fails or overruns says so instead of spinning (vela/loadWatchdog.ts)
     const unbindWatchdog = bindLoadWatchdog(ws)
     // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
@@ -653,6 +656,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindControls()
       unbindIndicators()
       unbindTelemetry()
+      unwatchRestart()
       unbindBell()
       unbindWatchdog()
       unbindPresets()

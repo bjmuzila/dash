@@ -214,7 +214,7 @@ export function registerStudies(): void {
           defval: 1,
           min: 1,
           max: 7,
-          tooltip: 'How many sessions back (up to 7). Each one starts at 0 at the 9:30 ET open.',
+          tooltip: 'How many sessions back (up to 7). Each one starts at 0 at the 9:30 ET open. ES / NQ also draw the night before it (SPX / NDX prints from 18:00 ET), from 0, then start again at 0 at 9:30.',
         },
         {
           key: 'legs',
@@ -239,7 +239,7 @@ export function registerStudies(): void {
       intradayOnly: true,
       inputs: () => [
         { key: 'scope', title: 'Expiries', type: 'string', defval: VF_SCOPES[0], options: VF_SCOPES },
-        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS },
+        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS, tooltip: 'Stock and index charts. ES / NQ always draw the whole Globex session (from 18:00 ET).' },
         { key: 'bin', title: 'Bucket (seconds)', type: 'int', defval: 60, min: 60, max: 900, step: 30 },
         { key: 'oi', title: 'OI GEX line', type: 'bool', defval: false },
         { key: 'combined', title: 'Combined line', type: 'bool', defval: true },
@@ -257,7 +257,7 @@ export function registerStudies(): void {
       inputs: () => [
         { key: 'style', title: 'Style', type: 'string', defval: NETGEX_STYLES[0], options: NETGEX_STYLES },
         { key: 'scope', title: 'Expiries', type: 'string', defval: VF_SCOPES[0], options: VF_SCOPES },
-        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS },
+        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS, tooltip: 'Stock and index charts. ES / NQ always draw the whole Globex session (from 18:00 ET).' },
       ],
     },
     () => import('./flow').then((m) => m.netGexImpl),
@@ -271,7 +271,7 @@ export function registerStudies(): void {
       gex: true,
       inputs: () => [
         { key: 'scope', title: 'Expiries', type: 'string', defval: VF_SCOPES[0], options: VF_SCOPES },
-        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS },
+        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS, tooltip: 'Stock and index charts. ES / NQ always draw the whole Globex session (from 18:00 ET).' },
         {
           key: 'bars',
           title: 'Change per bar (histogram)',

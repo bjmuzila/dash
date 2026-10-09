@@ -532,16 +532,6 @@ function Toolbar({
           onChange={(v) => update({ holdMin: Number(v) })}
         />
       </Field>
-      <Field label="0DTE">
-        <SegGroup<'trigger' | 'vote'>
-          options={[
-            { value: 'trigger', label: 'Trigger', title: '0DTE joining the later expiries is the lock' },
-            { value: 'vote', label: 'Votes', title: '0DTE counts like every other expiry' },
-          ]}
-          value={settings.zeroTrigger ? 'trigger' : 'vote'}
-          onChange={(v) => update({ zeroTrigger: v === 'trigger' })}
-        />
-      </Field>
       <Field label="ALL ex-0D">
         <SegGroup<'show' | 'require'>
           options={[

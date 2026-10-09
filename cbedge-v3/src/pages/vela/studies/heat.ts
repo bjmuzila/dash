@@ -26,6 +26,14 @@
 // BEHIND THE CANDLES: the page sends this study to the back of the stack when
 // it is added (studyOrder.ts). The object tree can still move it.
 //
+// ES / NQ OVERNIGHT (2026-10-09, Brandon: "all indicators for voltick category
+// should show es overnight or globex session"): a session's own read is its own
+// expiry, so the evening after a close (recorded under the NEXT expiry) was
+// missing. A futures chart adds every night's next-expiry columns too
+// (ladder.ts loadNextExpiryColumns — what the GEX Rail and the Path read
+// overnight), from the night before the oldest session drawn; a minute read both
+// ways is kept once.
+//
 // REPLAY: columns stop at the replay clock. Hover shows the strike, its GEX and
 // the minute under the pointer.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,7 +44,32 @@ import { tokenRgb, type RGB } from '@/design/theme'
 import { int, provideLayer, str, studyImpl, type StudyCtx } from './common'
 import { HEAT_SESSIONS, HEAT_TYPE } from './index'
 import { gexBasis } from '@/pages/vela/gexBasis'
-import { columnsUntil, ladderKey, loadLadder, sessionDates, type Ladder } from './ladder'
+import { columnsUntil, ladderKey, loadLadder, loadNextExpiryColumns, sessionDates, type Ladder } from './ladder'
+import type { GexColumn } from '@/board/gexCandles/gexHistory'
+
+/** The weekday before `date` (YYYY-MM-DD): Friday for a Monday or a weekend day. */
+function weekdayBefore(date: string): string {
+  let t = Date.parse(`${date}T12:00:00Z`) - 86_400_000
+  for (let i = 0; i < 3 && [0, 6].includes(new Date(t).getUTCDay()); i++) t -= 86_400_000
+  return new Date(t).toISOString().slice(0, 10)
+}
+
+/** The sessions' ladders; on ES / NQ with every Globex night's columns added (header). */
+async function loadHeat(c: StudyCtx, dates: string[], fresh: boolean): Promise<Ladder> {
+  const lad = await loadLadder(c, dates, fresh)
+  if (!c.sym.fut || !dates.length) return lad
+  const afters = [...new Set([weekdayBefore(dates[0]!), ...dates])]
+  const nights = await Promise.all(afters.map((d) => loadNextExpiryColumns(ladderKey(c), d, fresh).catch(() => [] as GexColumn[])))
+  const seen = new Set(lad.columns.map((x) => x.slotTs))
+  const extra: GexColumn[] = []
+  for (const col of nights.flat()) {
+    if (seen.has(col.slotTs)) continue
+    seen.add(col.slotTs)
+    extra.push(col)
+  }
+  if (!extra.length) return lad
+  return { ...lad, columns: lad.columns.concat(extra).sort((a, b) => a.slotTs - b.slotTs) }
+}
 
 const STEPS = 10
 
@@ -136,7 +169,7 @@ export const heatImpl = studyImpl<HeatS, Ladder>({
     }
   },
   dataKey: (c, s) => `${ladderKey(c)}|${sessionDates(c, s.sessions).join(',')}`,
-  load: (c, s, fresh) => loadLadder(c, sessionDates(c, s.sessions), fresh),
+  load: (c, s, fresh) => loadHeat(c, sessionDates(c, s.sessions), fresh),
   refreshMs: 60_000,
   everyTick: true,
   render: () => ({}),

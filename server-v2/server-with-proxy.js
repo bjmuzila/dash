@@ -2470,7 +2470,11 @@ async function handleGexVolFlow(req, res) {
   // session=rth (default) → 09:30–16:00 ET only. The overnight tail carries no
   // new prints: values just persist until the chain resets, which reads on the
   // chart as a long flat line and a phantom step. eth = the whole ET day.
-  const session = searchParams.get('session') === 'eth' ? 'eth' : 'rth';
+  // globex (2026-10-09, Vela's ES / NQ charts) = from 18:00 ET the evening before
+  // today on, so a futures chart draws the night, the cash session and this
+  // evening; the table keeps 48h, so that evening is always still there.
+  const sessionRaw = searchParams.get('session');
+  const session = sessionRaw === 'eth' ? 'eth' : sessionRaw === 'globex' ? 'globex' : 'rth';
 
   // option_strike_gex_history is MULTI-SYMBOL (the `symbol` column defaults to
   // '$SPX'; gex-history-writer.js normalises 'SPX' → '$SPX' and SPY/QQQ pass
@@ -2507,7 +2511,11 @@ async function computeVolFlow({ key, binSec, binMs, scope, expiryParam, session,
   // 13:00–16:00 stretch has no rows, which plots as a shorter session rather
   // than a wrong one.
   const etToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
-  const winFrom = session === 'rth' ? etSessionOpenMs(etToday) : etEpochMs(etToday, 0, 0);
+  const winFrom = session === 'rth'
+    ? etSessionOpenMs(etToday)
+    : session === 'globex'
+      ? etEpochMs(new Date(Date.parse(`${etToday}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10), 18, 0)
+      : etEpochMs(etToday, 0, 0);
   const winTo = session === 'rth' ? etSessionCloseMs(etToday) : Number.MAX_SAFE_INTEGER;
 
   // `symbol IS NULL OR symbol = $1` used to sit on both queries. The column is
