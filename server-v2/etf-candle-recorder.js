@@ -415,6 +415,20 @@ function announceRoster(roster) {
 // the whole day anyway, so a missed minute is filled in a minute later.
 let ticking = false;
 
+// SHORT WINDOW, FULL SWEEP EVERY N TICKS (2026-10-09). Every tick used to pull
+// the whole day from ET midnight for the whole roster: by 09:40 that was ~55k
+// 1m bars down one socket and 11–17k rows upserted EVERY minute, the ticks ran
+// 61–74s (> the 60s interval), most symbols came back empty at the 40s cap, and
+// the dashboard process sat at 115% CPU with second-long event-loop stalls. And
+// it grows all day, because the window does. Now a tick asks for the last
+// TICK_LOOKBACK_MIN minutes (the upsert merges, so a short window only adds or
+// corrects recent bars), and every FULL_EVERY-th tick — and the first after boot —
+// still sweeps the whole day so a late-corrected bar or a missed tick is caught.
+// ETF_CANDLE_TICK_LOOKBACK_MIN=0 restores the old whole-day pull every tick.
+const TICK_LOOKBACK_MIN = Math.max(0, Number(process.env.ETF_CANDLE_TICK_LOOKBACK_MIN ?? 15));
+const FULL_EVERY = Math.max(1, Number(process.env.ETF_CANDLE_FULL_EVERY ?? 15));
+let tickCount = 0;
+
 async function tick() {
   if (ticking) {
     console.warn('[etf-candle] previous tick still running — skipping this one');
@@ -449,7 +463,11 @@ async function tick() {
     // Every symbol every minute — which is what the GEX bubble trail needs, since
     // its finest bucket is one minute and a candle the bubbles have nothing to
     // sit on is a hole in the chart.
-    const bySymbol = await fetchIntradayCandlesMulti(roster, '1m', etDayStartMs(), {
+    const dayStart = etDayStartMs();
+    const full = TICK_LOOKBACK_MIN === 0 || tickCount % FULL_EVERY === 0;
+    tickCount += 1;
+    const from = full ? dayStart : Math.max(dayStart, Date.now() - TICK_LOOKBACK_MIN * 60_000);
+    const bySymbol = await fetchIntradayCandlesMulti(roster, '1m', from, {
       quietMs: TICK_QUIET_MS, hardMs: TICK_HARD_MS,
     });
 

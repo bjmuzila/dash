@@ -6,8 +6,9 @@
 //   [500] SPX  S&P 500 Index                     ● CLOSED   ▾
 //   LEVELS                                              NOW  ⚙
 //   ★ Volt                                     7,725.00   +3.64
-//   ◆ Coil                                     7,730.00   +8.64
 //   ↘ Reversal                                 7,715.00   −6.36
+//   ↯ Surge                                    7,730.00   +8.64
+//   ◆ Coil                                     7,735.00  +13.64
 //   ⚡ Flip                                     7,716.90   −4.46
 //   STUDIES
 //   ▬ Voltick Path                                          ◉
@@ -17,14 +18,14 @@
 //   · Icon and name: tickerIcon.ts and symbolNames.ts, the picker's own.
 //   · State: Vela's own market badge (its real trading calendar), read off the
 //     symbol line this card hides; REPLAY while a bar replay runs.
-//   · LEVELS · NOW: Volt / Coil / Reversal / Flip off the live chain, the read
+//   · LEVELS · NOW: Volt / Reversal / Surge / Coil / Flip off the live chain, the read
 //     Level Alerts and the phone's strip use (levels/levelAlerts.ts levelsFor).
 //     Drawn marks (levelMarks.ts), never typed.
 //     ONE LEVEL PER ROW (Brandon, 2026-10-05: "can we make this vertical, one
 //     level per row"): mark, name, level, distance from price, lined up with the
 //     study rows below (the level where a study's value sits). When any level
 //     has cents, every level shows two places so the column lines up. One ⚙ in
-//     the section head (which levels, distance from price) covers all four.
+//     the section head (which levels, distance from price) covers them all.
 //     FOLDED, it is still one line (marks and levels, no names): on a chart too
 //     narrow for that line, it steps down (smaller type, then no distances, then
 //     whole numbers) instead of wrapping or clipping.
@@ -96,8 +97,9 @@ const EMPTY_RETRIES_MS = [5_000, 15_000, 30_000] as const
 
 const LEVELS: ReadonlyArray<{ key: MarkKey; name: string }> = [
   { key: 'volt', name: 'Volt' },
-  { key: 'coil', name: 'Coil' },
   { key: 'reversal', name: 'Reversal' },
+  { key: 'surge', name: 'Surge' },
+  { key: 'coil', name: 'Coil' },
   { key: 'flip', name: 'Flip' },
 ]
 
@@ -117,7 +119,7 @@ const COG =
 
 // ── Prefs (this browser) ─────────────────────────────────────────────────────
 
-type LineLevel = 'volt' | 'coil' | 'reversal'
+type LineLevel = 'volt' | 'coil' | 'reversal' | 'surge'
 
 interface Prefs {
   /** Flip on the card (it has no line, so no study input to hold it). */
@@ -136,12 +138,12 @@ function readPrefs(): Prefs {
     const s: Partial<Record<LineLevel, boolean>> = j.show && typeof j.show === 'object' ? j.show : {}
     return {
       flip: j.flip !== false,
-      show: { volt: s.volt !== false, coil: s.coil !== false, reversal: s.reversal !== false },
+      show: { volt: s.volt !== false, coil: s.coil !== false, reversal: s.reversal !== false, surge: s.surge !== false },
       dist: j.dist === true,
       fold: j.fold && typeof j.fold === 'object' ? j.fold : {},
     }
   } catch {
-    return { flip: true, show: { volt: true, coil: true, reversal: true }, dist: false, fold: {} }
+    return { flip: true, show: { volt: true, coil: true, reversal: true, surge: true }, dist: false, fold: {} }
   }
 }
 const prefs = readPrefs()
@@ -255,7 +257,7 @@ class Card {
   private offChart: Array<() => void> = []
   private chart: Vela | null = null
   private sym = ''
-  private chain: { flip: number | null; volt: number | null; coil: number | null; reversal: number | null; price: number | null } | null = null
+  private chain: { flip: number | null; volt: number | null; coil: number | null; reversal: number | null; surge: number | null; price: number | null } | null = null
   private price: number | null = null
   private chainTimer: ReturnType<typeof setInterval> | null = null
   /** The first levels read for this symbol is still out: the row says "Loading levels…". */
@@ -381,7 +383,7 @@ class Card {
       .then((r) => {
         if (sym !== this.sym) return
         const at = (k: string) => r.levels.find((l) => l.key === k)?.price ?? null
-        this.chain = { flip: at('flip'), volt: at('volt'), coil: at('coil'), reversal: at('reversal'), price: r.price }
+        this.chain = { flip: at('flip'), volt: at('volt'), coil: at('coil'), reversal: at('reversal'), surge: at('surge'), price: r.price }
         this.afterRead()
       })
       .catch(() => {
@@ -397,7 +399,7 @@ class Card {
   private afterRead(): void {
     this.chainLoading = false
     const c = this.chain
-    const empty = !c || (c.flip == null && c.volt == null && c.coil == null && c.reversal == null)
+    const empty = !c || (c.flip == null && c.volt == null && c.coil == null && c.reversal == null && c.surge == null)
     if (empty && this.emptyReads < EMPTY_RETRIES_MS.length && !this.emptyRetry) {
       const wait = EMPTY_RETRIES_MS[this.emptyReads++]!
       this.emptyRetry = setTimeout(() => {

@@ -21,6 +21,7 @@ import { EVENTS_TYPE, registerStudies } from '@/pages/vela/studies'
 import { bindEventsHost } from '@/pages/vela/studies/eventsHost'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
 import { bindIndicatorPresets } from '@/pages/vela/indicatorPresets'
+import { bindChartSettingsSave, bindChartStyleSync } from '@/pages/vela/chartSettingsSave'
 import { bindPinnedWatchlist, registerWatchlist } from '@/pages/vela/watchlist/panel'
 import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/replay'
 import { bindStudyOrder } from '@/pages/vela/studyOrder'
@@ -113,11 +114,11 @@ import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 // pages/vela/vtPath/ — Voltick's two trail shapes, transcribed from its
 // HeatChart.jsx / trailruns.js: one bubble per level per candle (★ Volt,
 // ↘ Reversal, ◆ Coil, ↯ Surge) at the strike that level held, sized by how big
-// it was; and the Ribbon, the same rows as bands. The levels are the walls
-// migration renamed (Volt = CORE, Coil = a wall on the Volt's side of spot
-// that is not the Volt, Reversal = the wall across spot, Surge = the
-// volume-only CORE), so they reach back
-// as far as walls_log does. Two studies on Vela's Indicators list
+// it was; and the Ribbon, the same rows as bands. The levels follow the
+// 2026-10-09 definition (data/voltickLevels.ts vtFromLadder) off the per-minute
+// ladder where it is kept, and off the walls migration (vtTermsFromWalls:
+// Volt = CORE, Reversal = the wall across price, Surge = the other wall on the
+// Volt's side) back as far as walls_log does. Two studies on Vela's Indicators list
 // (Built-in → "Voltick Path…", "Voltick Path Ribbon…"); Voltick Path is put on
 // every chart once (`<key>-vtpath`; CB Walls was too, until it went opt-in), and
 // the legend ✕ takes it off for good.
@@ -180,13 +181,14 @@ import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 //               replay dock is Volt Blue (Voltick's replay transport), the prior
 //               session is Sky, pre-market / overnight is Pre-market green, a
 //               measurement (IB, EM, TPO) is slate or Sky.
-//   · names     Voltick's levels, by Brandon's definition (2026-10-04):
-//               ★ Volt = CORE, the top net GEX; ◆ Coil = the 2nd top net GEX on
-//               the Volt's side of spot; ↘ Reversal = the top net GEX across
-//               spot; ⚡︎ Flip = the gamma flip. Off a live ladder:
+//   · names     Voltick's levels, by Brandon's definition (2026-10-09):
+//               ★ Volt = the top net GEX; ↘ Reversal = the top net GEX across
+//               price from the Volt; ↯ Surge = the next top that is neither;
+//               ◆ Coil = any other strike ≥ half the Volt (the GEX menu's Coil
+//               switch); ⚡︎ Flip = the gamma flip. Off a live ladder:
 //               data/voltickLevels.ts vtFromLadder; off the recorded walls
-//               (a wall on the Volt's side that is not the Volt is the Coil, the
-//               wall across is the Reversal): levelLog/wallData.ts vtFromWalls.
+//               (the wall across is the Reversal, the other wall on the Volt's
+//               side is the Surge): levelLog/wallData.ts vtTermsFromWalls.
 //   · type      Inter for words, JetBrains Mono for every number and every
 //               uppercase label; radii 6 / 10 / 12; the card shadow with its
 //               1px top highlight; the lit pill for a panel's primary action.
@@ -549,6 +551,10 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
     // settings by name) in place of Vela's Reset defaults (vela/indicatorPresets.ts)
     const unbindPresets = bindIndicatorPresets(ws)
+    // one look for every chart (Vela's Style link, on once), and Chart settings'
+    // footer: Save layout · Reset defaults · Factory (vela/chartSettingsSave.ts)
+    bindChartStyleSync(ws, storageKey)
+    const unbindChartSave = bindChartSettingsSave(ws, storageKey)
     const unbindEvents = bindEventsHost(ws)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
@@ -663,6 +669,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindBell()
       unbindWatchdog()
       unbindPresets()
+      unbindChartSave()
       unbindEvents()
       unbindReplay()
       unbindOrder()

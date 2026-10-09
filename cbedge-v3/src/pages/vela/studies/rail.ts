@@ -12,10 +12,14 @@
 // strikes the column carries, the named ones tagged. The tags are Voltick's
 // (the page pins it), read by the definition (data/voltickLevels.ts
 // vtFromLadder) off the rail's GEX setting — Vol only by default since
-// 2026-10-06, the Voltick Path's book, so tags and bubbles line up:
-// ★ Volt = the top net GEX, ◆ Coil = the 2nd top on the Volt's side of spot,
-// ↘ Reversal = the top across spot. ↯ Surge (the biggest volume GEX) keeps the
-// Voltick bot's read. On the CB theme: CB / CW / PW.
+// 2026-10-06, the Voltick Path's book, so tags and bubbles line up
+// (2026-10-09 definition): ★ Volt = the top net GEX, ↘ Reversal = the top
+// across price from the Volt, ↯ Surge = the next top that is neither, ◆ Coil =
+// every other strike at least half the Volt (the GEX menu's Coil switch).
+// "Price" is the CHART's price moved onto the index's strikes, not the ladder's
+// recorded spot: before the cash open (and overnight on ES / NQ) that spot is
+// stale, and on 2026-10-09 it put the Reversal on the Volt's own side of price.
+// On the CB theme: CB / CW / PW.
 //
 // WHERE IT SITS. Vela draws the whole chart (plot, price axis, time axis) on
 // canvases inside one absolutely placed box. The rail pulls that box in from
@@ -102,11 +106,11 @@
 
 import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
-import { voltickMarks, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
+import { VT_LADDER_TITLE, vtDef, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
 import { RAIL_EXPIRIES, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
-import { gexBasis } from '@/pages/vela/gexBasis'
+import { gexBasis, vtCoilOn } from '@/pages/vela/gexBasis'
 import { cellAlpha, columnStats, fmtGex } from '@/board/multiGreek/mgMath'
 import { columnsUntil, ladderKey, loadChainLadder, loadRailLadder, sessionDates, type Ladder } from './ladder'
 
@@ -193,6 +197,18 @@ function fmt(v: number): string {
   return `${s}${a.toFixed(0)}`
 }
 
+/**
+ * The chart's price now: the newest bar's close up to the replay clock. The
+ * Voltick sides are judged at this, not at the ladder's recorded spot (header).
+ */
+function chartPrice(c: StudyCtx): number | null {
+  for (let i = c.bars.length - 1; i >= 0; i--) {
+    const b = c.bars[i]!
+    if (b.time <= c.until && Number.isFinite(b.close) && b.close > 0) return b.close
+  }
+  return null
+}
+
 /** The session the rail reads: the replay's day, or the newest on the chart. */
 function railDay(c: StudyCtx): string[] {
   return sessionDates(c, 1)
@@ -243,16 +259,21 @@ export const railImpl = studyImpl<RailS, Ladder>({
     if (voltick) {
       // the tags read the rail's own GEX setting (2026-10-06: volume only by default,
       // the Voltick Path's book, so the two line up); `cells` is already OI only on OI only
-      const def = vtFromLadder(cells.map((x) => ({ strike: x.strike, net: s.metric === 'vol' ? x.netVol : x.net })), model.spot)
-      const surge = voltickMarks(col.cells.map((x) => ({ strike: x.strike, book: x.net, vol: x.netVol })), { always: true }).surge
-      const vt: VoltickMarks = { volt: def.volt, coil: def.coil, reversal: def.reversal, surge, coils: def.coil != null ? [def.coil] : [] }
+      // the sides are judged at the chart's price (header), moved onto the index's strikes
+      const px = chartPrice(c)
+      const spot = px != null ? px - shift : model.spot
+      const def = vtFromLadder(cells.map((x) => ({ strike: x.strike, net: s.metric === 'vol' ? x.netVol : x.net })), spot, null, { coil: vtCoilOn() })
+      const vt: VoltickMarks = { volt: def.volt, coil: def.coil, reversal: def.reversal, surge: def.surge, coils: def.coils }
       lv.vt = vt
     }
     const rows: RailRowOut[] = shown.map((r) => {
       const tags: RailRowOut['tags'] = []
       if (s.tags) {
         if (lv.vt) {
-          for (const m of vtLevelsAt(lv.vt, r.strike)) tags.push({ key: m.key, text: m.mark, title: m.title, fill: m.fill, ink: m.ink })
+          const hits = vtLevelsAt(lv.vt, r.strike)
+          // every Coil is tagged, not only the heaviest
+          if (lv.vt.coils.includes(r.strike) && !hits.some((m) => m.key === 'coil')) hits.push(vtDef('coil'))
+          for (const m of hits) tags.push({ key: m.key, text: m.mark, title: VT_LADDER_TITLE[m.key], fill: m.fill, ink: m.ink })
         } else {
           for (const k of ['cb', 'cw', 'pw'] as const) if (lv[k] === r.strike) tags.push({ key: k, text: k.toUpperCase(), title: TAG_TITLE[k]! })
         }
@@ -304,7 +325,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
       empty: rows.length ? '' : 'Empty ladder',
-      key: `${col.slotTs}|${next?.expiry ?? ''}|${lad.allExpiries ?? 0}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}`,
+      key: `${col.slotTs}|${next?.expiry ?? ''}|${lad.allExpiries ?? 0}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}|${lv.vt ? `${lv.vt.volt},${lv.vt.reversal},${lv.vt.surge},${lv.vt.coils.join('/')}` : ''}`,
     }
   },
 })

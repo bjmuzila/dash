@@ -240,14 +240,24 @@ export function vtLevelsAt(marks: VoltickMarks | null | undefined, strike: numbe
 /** Owner-only Voltick UI theme, read once — the toggle reloads the page. */
 export const VOLTICK_UI = readUiTheme() === 'voltick'
 
-// ── THE DEFINITION, ON A LADDER (Brandon, 2026-10-04) ────────────────────────
-//   Volt ★      = CORE: the top net GEX on the board (OI + vol, by size)
-//   Coil ◆      = the 2nd top net GEX on the Volt's side of spot
-//   Reversal ↘  = the top net GEX on the other side of spot
-// So the Coil is never the Volt's own strike. Read by the Vela chart
-// (pages/vela: Key Levels, Level Alerts, the session strip, the GEX rail).
+// ── THE DEFINITION, ON A LADDER (Brandon, 2026-10-09) ────────────────────────
+//   Volt ★      = the highest net GEX on the board (by size)
+//   Reversal ↘  = the next highest net GEX that sits on the OTHER side of spot
+//                 from the Volt (the top net GEX across spot)
+//   Surge ↯     = the next highest net GEX that is neither the Volt nor the
+//                 Reversal (either side of spot)
+//   Coil ◆      = every other strike at least half the Volt's size (Volt,
+//                 Reversal and Surge excluded), heaviest first, up to five.
+//                 Switchable: the GEX menu's Coil toggle (pages/vela/gexBasis.ts
+//                 vtCoilOn) is passed in as `opts.coil`.
+// Replaces the 2026-10-04 reading (Coil = the 2nd top on the Volt's side, Surge
+// = the biggest volume GEX). "Spot" is the price the reading is judged at: on
+// Vela, the chart's own price moved onto the index's strikes (the ladder's
+// recorded spot goes stale before the cash open and overnight).
+// Read by the Vela chart (pages/vela: GEX Rail, Voltick Path, Key Levels, Level
+// Alerts, the legend card, the session strip, Voltick Walls overnight).
 // voltickMarks() above is the Voltick bot's own port and is unchanged; the
-// recorded-walls version of this is vtFromWalls() in pages/levelLog/wallData.ts.
+// recorded-walls version of this is vtTermsFromWalls() in pages/levelLog/wallData.ts.
 
 export interface VtLadderRow {
   strike: number
@@ -255,48 +265,67 @@ export interface VtLadderRow {
   net: number
 }
 
+export interface VtLadderLevels {
+  volt: number | null
+  reversal: number | null
+  surge: number | null
+  /** The heaviest Coil (coils[0]); null when none qualifies or the Coil is switched off. */
+  coil: number | null
+  /** Every Coil, heaviest first (up to five). */
+  coils: number[]
+}
+
+export interface VtLadderOpts {
+  /** Name Coils at all (the GEX menu's Coil toggle). Default on. */
+  coil?: boolean
+}
+
+/** Tooltips for the levels as vtFromLadder names them (VT_LEVELS' titles are the bot's definitions, still used by the board). */
+export const VT_LADDER_TITLE: Record<VtKey, string> = {
+  volt: 'Volt — the highest net GEX on the board',
+  reversal: 'Reversal — the highest net GEX on the other side of price from the Volt',
+  surge: 'Surge — the next highest net GEX that is not the Volt or the Reversal',
+  coil: 'Coil — a level at least half the Volt’s size',
+}
+
+/** A Coil is at least this share of the Volt's size. */
+export const COIL_SHARE = 0.5
+const MAX_COILS = 5
+
 /**
- * Volt / Coil / Reversal for one ladder. `volt` may be handed in (a surface's
- * own CORE, so the two cannot disagree); otherwise it is the top |net|. With no
- * spot the sides cannot be told apart, and only the Volt is named.
+ * Volt / Reversal / Surge / Coil for one ladder (definition above). `volt` may be
+ * handed in (a surface's own CORE, so the two cannot disagree); otherwise it is
+ * the top |net|. With no spot the sides cannot be told apart: no Reversal, and
+ * the Surge is simply the next highest after the Volt.
  */
 export function vtFromLadder(
   rows: readonly VtLadderRow[],
   spot: number | null | undefined,
   volt?: number | null,
-): { volt: number | null; coil: number | null; reversal: number | null } {
+  opts: VtLadderOpts = {},
+): VtLadderLevels {
   const ok = rows.filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.net) && r.net !== 0)
-  let v = volt ?? null
-  if (v == null) {
-    let best = 0
-    for (const r of ok) {
-      const a = Math.abs(r.net)
-      if (a > best) {
-        best = a
-        v = r.strike
-      }
-    }
-  }
-  if (v == null || spot == null || !(spot > 0)) return { volt: v, coil: null, reversal: null }
-  const up = v >= spot
-  let coil: number | null = null
+  // heaviest first; ties go to the lower strike so a reading never flickers
+  const byAbs = ok.slice().sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.strike - b.strike)
+  const v = volt ?? byAbs[0]?.strike ?? null
+  const none: VtLadderLevels = { volt: v, reversal: null, surge: null, coil: null, coils: [] }
+  if (v == null) return none
+  const voltAbs = Math.abs(ok.find((r) => r.strike === v)?.net ?? byAbs[0]?.net ?? 0)
+
   let reversal: number | null = null
-  let coilBest = 0
-  let revBest = 0
-  for (const r of ok) {
-    if (r.strike === v) continue
-    const a = Math.abs(r.net)
-    if (up ? r.strike >= spot : r.strike < spot) {
-      if (a > coilBest) {
-        coilBest = a
-        coil = r.strike
-      }
-    } else if (a > revBest) {
-      revBest = a
-      reversal = r.strike
-    }
+  if (spot != null && spot > 0) {
+    const up = v >= spot
+    reversal = byAbs.find((r) => r.strike !== v && (up ? r.strike < spot : r.strike >= spot))?.strike ?? null
   }
-  return { volt: v, coil, reversal }
+  const surge = byAbs.find((r) => r.strike !== v && r.strike !== reversal)?.strike ?? null
+  const coils =
+    opts.coil === false || !(voltAbs > 0)
+      ? []
+      : byAbs
+          .filter((r) => r.strike !== v && r.strike !== reversal && r.strike !== surge && Math.abs(r.net) >= COIL_SHARE * voltAbs)
+          .slice(0, MAX_COILS)
+          .map((r) => r.strike)
+  return { volt: v, reversal, surge, coil: coils[0] ?? null, coils }
 }
 
 export type CbLevelKey = 'cb' | 'cw' | 'pw'

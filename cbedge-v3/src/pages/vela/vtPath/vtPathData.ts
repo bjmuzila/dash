@@ -66,14 +66,25 @@
 // CORE write that session takes the OI + Vol walls in force instead (their open
 // capture is pinned at 09:29); from the first vol write on, it is the volume
 // book alone. The Surge stays the volume CORE, so it simply starts at 09:45.
+//
+// ── THE 2026-10-09 DEFINITION (Brandon) ─────────────────────────────────────
+// Every frame now names the levels by data/voltickLevels.ts vtFromLadder:
+// ★ Volt the top net GEX, ↘ Reversal the top across price from the Volt, ↯ Surge
+// the next top that is neither, ◆ Coil every other strike ≥ half the Volt (the
+// GEX menu's Coil switch). The Surge is no longer the volume book's CORE. A
+// ladder frame judges the sides at the CANDLE'S close moved onto the index's
+// strikes (close − shift), not the column's recorded spot, which is stale before
+// the cash open and overnight. Off walls_log (vtTermsFromWalls): Volt = CORE,
+// Reversal = the wall across price, Surge = the other wall on the Volt's side,
+// no Coil (the log keeps no more strikes).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { OHLCV } from '@luxalgo/vela'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
-import { vtFromWalls } from '@/pages/levelLog/wallData'
+import { vtTermsFromWalls } from '@/pages/levelLog/wallData'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import type { GexColumn } from '@/board/gexCandles/gexHistory'
-import { voltickMarks, vtFromLadder } from '@/data/voltickLevels'
+import { vtFromLadder } from '@/data/voltickLevels'
 import { columnAt, loadNextExpiryColumns, loadSessionColumns } from '@/pages/vela/studies/ladder'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import {
@@ -85,7 +96,7 @@ import {
   type DayModel,
   type Write,
 } from '@/pages/vela/wallsData'
-import { ladderValue, type GexBasis } from '@/pages/vela/gexBasis'
+import { ladderValue, vtCoilOn, type GexBasis } from '@/pages/vela/gexBasis'
 import { holdSizes, pathFill, type FillPt, type PathPt, type PathRole } from './trailruns'
 
 const DAY_MS = 86_400_000
@@ -230,34 +241,34 @@ export function ladderFrame(
   if (!col || !col.cells.length) return null
   const shift = shiftAt ? shiftAt(col.slotTs) : null
   if (shift == null) return null
-  let spot = col.spot
+  // the sides are judged at this candle's close, moved onto the index's strikes
+  // (header); the column's own spot only when the candle has no close
+  let spot = Number.isFinite(bar.close) && bar.close > 0 ? bar.close - shift : col.spot
   if (!(spot > 0)) {
     // legacy rows carry no spot: the middle of the ladder, as the rail does
     const ks = col.cells.map((c) => c.strike)
     spot = (Math.max(...ks) + Math.min(...ks)) / 2
   }
-  const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: ladderValue(c.net, c.netVol, book) })), spot)
+  const def = vtFromLadder(
+    col.cells.map((c) => ({ strike: c.strike, net: ladderValue(c.net, c.netVol, book) })),
+    spot,
+    null,
+    { coil: vtCoilOn() },
+  )
   if (def.volt == null) return null
-  // the rail's own Surge call (studies/rail.ts), so the ↯ bead and the rail's ↯ tag agree
-  const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })), { always: true }).surge
   const sizeOf = (k: number | null) => {
     if (k == null) return null
     const c = col.cells.find((x) => x.strike === k)
     return c ? Math.abs(ladderValue(c.net, c.netVol, book)) : null
   }
-  // the Surge is the volume book's, so its size is too
-  const surgeSize = surge == null ? null : (() => {
-    const c = col.cells.find((x) => x.strike === surge)
-    return c ? Math.abs(c.netVol) : null
-  })()
   const sh = (k: number | null) => (k == null ? null : k + shift)
   return {
     t: Math.floor(bar.time / 1000),
     volt: sh(def.volt),
-    surge: sh(surge),
+    surge: sh(def.surge),
     rev: sh(def.reversal),
-    gates: def.coil != null ? [def.coil + shift] : [],
-    sz: { volt: sizeOf(def.volt), surge: surgeSize, rev: sizeOf(def.reversal), gates: def.coil != null ? [sizeOf(def.coil)] : [] },
+    gates: def.coils.map((k) => k + shift),
+    sz: { volt: sizeOf(def.volt), surge: sizeOf(def.surge), rev: sizeOf(def.reversal), gates: def.coils.map((k) => sizeOf(k)) },
   }
 }
 
@@ -341,24 +352,23 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
     if (!day || !cb) continue
     const cw = heldAt(day.levels.get('call_wall'), end)
     const pw = heldAt(day.levels.get('put_wall'), end)
-    const vt = vtFromWalls(cb.strike, cw?.strike, pw?.strike, bar.close)
-    // which recorded rows the Coil and the Reversal are (for their sizes)
+    // the 2026-10-09 definition off the three recorded walls (header): no Coil here
+    const vt = vtTermsFromWalls(cb.strike, cw?.strike, pw?.strike, bar.close)
+    // which recorded rows the Surge and the Reversal are (for their sizes)
     const rowOf = (k: number | null) => (k == null ? null : k === cw?.strike ? cw : k === pw?.strike ? pw : null)
-    const coilW = rowOf(vt.coil)
+    const surgeW = rowOf(vt.surge)
     const revW = rowOf(vt.reversal)
-    const volDay = volByDate.get(day.date)
-    const surgeW = volDay ? heldAt(volDay.levels.get('cb'), end) : null
     out.push({
       t: Math.floor(bar.time / 1000),
       volt: cb.strike,
-      surge: surgeW?.strike ?? null,
+      surge: vt.surge,
       rev: vt.reversal,
-      gates: vt.coil != null ? [vt.coil] : [],
+      gates: [],
       sz: {
         volt: abs(cb),
         surge: abs(surgeW),
         rev: abs(revW),
-        gates: vt.coil != null ? [abs(coilW)] : [],
+        gates: [],
       },
     })
   }

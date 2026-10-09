@@ -10,6 +10,8 @@
 //   OI only     open interest GEX
 //   OI + Vol    open interest plus today's volume
 //   Vol only    today's volume alone             ✓
+//   LEVELS
+//   Coil: on    ½ the Volt or more               ✓   (gexBasis.ts vtCoilOn)
 //
 // A pick applies to every chart at once and the menu closes. ↑ ↓ move, Enter or
 // Space picks, Esc closes. Phone: a ⋮ row (phoneChrome.ts shows the book on it)
@@ -23,7 +25,7 @@
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { iconEl, registerIcon, svg16 } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { GEX_BASES, gexBasis, gexBasisLabel, gexBasisShort, onGexBasis, setGexBasis } from '@/pages/vela/gexBasis'
+import { GEX_BASES, gexBasis, gexBasisLabel, gexBasisShort, onGexBasis, setGexBasis, setVtCoil, vtCoilOn } from '@/pages/vela/gexBasis'
 
 export const GEX_BASIS_ACTION_ID = 'cb-gex-basis'
 /** What the button is called before it is dressed, and the ⋮ row's name on a phone. */
@@ -96,8 +98,29 @@ function toggleMenu(anchor: HTMLElement | null): void {
     rows.push(b)
     group.append(b)
   }
+  // THE COIL SWITCH (gexBasis.ts vtCoilOn): Coils named or not, on every chart
+  const lv = el('div', 'cb-wsm-group')
+  lv.append(el('div', 'cb-wsm-h', 'Levels'))
+  {
+    const on = vtCoilOn()
+    const b = el('button', 'cb-wsm-row')
+    b.type = 'button'
+    b.setAttribute('role', 'menuitemcheckbox')
+    b.setAttribute('aria-checked', on ? 'true' : 'false')
+    b.title = 'Coil: every level at least half the Volt’s size (not the Volt, Reversal or Surge). Click to turn on or off'
+    const right = el('span', 'cb-wsm-right')
+    right.append(el('span', 'cb-gexm-hint', '½ the Volt or more'))
+    right.append(el('span', 'cb-wsm-check', on ? '✓' : ''))
+    b.append(el('span', 'cb-wsm-label', on ? 'Coil: on' : 'Coil: off'), right)
+    b.addEventListener('click', () => {
+      close()
+      setVtCoil(!vtCoilOn())
+    })
+    rows.push(b)
+    lv.append(b)
+  }
   const grid = el('div', 'cb-wsm-grid')
-  grid.append(group)
+  grid.append(group, lv)
   box.append(grid)
   place()
 

@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// VOLTICK'S LEVEL MARKS, DRAWN: ★ Volt · ◆ Coil · ↘ Reversal · ⚡ Flip.
+// VOLTICK'S LEVEL MARKS, DRAWN: ★ Volt · ◆ Coil · ↘ Reversal · ↯ Surge · ⚡ Flip.
 //
 // The same four marks Voltick uses (voltick-v3/src/voltboard/derive.ts
 // MARK_GLYPH), drawn as 12×12 shapes instead of typed characters. Typed, Windows
@@ -17,7 +17,7 @@
 // text: a title is a string, it has nowhere to put a shape.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type MarkKey = 'volt' | 'coil' | 'reversal' | 'flip'
+export type MarkKey = 'volt' | 'coil' | 'reversal' | 'surge' | 'flip'
 
 const SHAPES: Record<MarkKey, string> = {
   // a five-point star, centred a touch low so it sits on the text's baseline
@@ -25,6 +25,9 @@ const SHAPES: Record<MarkKey, string> = {
   coil: '<path fill="currentColor" d="M6 .9 11.1 6 6 11.1.9 6Z"/>',
   reversal:
     '<path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M2.4 2.4 9.3 9.3M9.5 4.1v5.4H4.1"/>',
+  // ↯ a zig-zag bolt ending in an arrowhead, stroked so it never reads as the Flip's filled ⚡
+  surge:
+    '<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M7.6 1 4.2 5.6h3.6L5 10.6M3.2 8.4 5 10.6l2.4-1.5"/>',
   flip: '<path fill="currentColor" d="M7.4.5 1.9 7h3.5l-1 4.5L10.1 5H6.5Z"/>',
 }
 
@@ -41,4 +44,4 @@ export function markEl(doc: Document, key: MarkKey): HTMLElement {
   return box
 }
 
-export const isMarkKey = (k: string): k is MarkKey => k === 'volt' || k === 'coil' || k === 'reversal' || k === 'flip'
+export const isMarkKey = (k: string): k is MarkKey => k === 'volt' || k === 'coil' || k === 'reversal' || k === 'surge' || k === 'flip'

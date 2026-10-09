@@ -4,11 +4,17 @@
 // chart; data/voltickLevels.ts):
 //
 //   Voltick   ★ Volt                       CORE: the top net GEX
-//             ◆ Coil                       the 2nd top net GEX on the Volt's side
-//                                          of price
-//             ↘ Reversal                   the top net GEX across price
+//             ↘ Reversal                   the top net GEX across price from
+//                                          the Volt
+//             ↯ Surge                      the next top net GEX, not the Volt
+//                                          or the Reversal
+//             ◆ Coil                       the heaviest other strike ≥ half the
+//                                          Volt (the GEX menu's Coil switch)
 //             ⚡︎ Flip                       the zero-gamma strike
-//                                          (all four off the front chain's live
+//                                          (2026-10-09 definition; the sides
+//                                          judged at the chart's price moved
+//                                          onto the index's strikes; all off
+//                                          the front chain's live
 //                                          ladder, on the page's GEX switch
 //                                          (gexBasis.ts), the definition in
 //                                          data/voltickLevels.ts; on ES / NQ the
@@ -64,8 +70,8 @@ import { query } from '@/data/api'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
 import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { loadBasis, wallSeriesFor } from '@/pages/vela/wallsIndicator'
-import { chainValue, flipOf, gexBasis } from '@/pages/vela/gexBasis'
-import { vtFromWalls } from '@/pages/levelLog/wallData'
+import { chainValue, flipOf, gexBasis, vtCoilOn } from '@/pages/vela/gexBasis'
+import { vtTermsFromWalls } from '@/pages/levelLog/wallData'
 import { vtFromLadder } from '@/data/voltickLevels'
 import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
 import { replayActive } from '@/pages/vela/replay/clock'
@@ -90,16 +96,17 @@ export interface Level {
 
 /** Voltick's flip mark: ⚡ + VS15, so it is TEXT in the flip's violet, never the orange emoji. */
 const FLIP_MARK = '\u26A1\uFE0E'
-const VT_LEVEL: Record<'volt' | 'coil' | 'reversal' | 'flip', { name: string; mark: string; tone: string }> = {
+const VT_LEVEL: Record<'volt' | 'coil' | 'reversal' | 'surge' | 'flip', { name: string; mark: string; tone: string }> = {
   volt: { name: 'Volt', mark: '★', tone: 'var(--color-vt-volt)' },
   coil: { name: 'Coil', mark: '◆', tone: 'var(--color-vt-coil)' },
   reversal: { name: 'Reversal', mark: '↘', tone: 'var(--color-vt-reversal)' },
+  surge: { name: 'Surge', mark: '↯', tone: 'var(--color-vt-surge)' },
   flip: { name: 'Flip', mark: FLIP_MARK, tone: 'var(--color-vt-flip)' },
 }
 const vtLevel = (key: keyof typeof VT_LEVEL, price: number | null): Level => ({ key, group: 'Voltick', price, ...VT_LEVEL[key] })
 
 /** A level's name inside a sentence: Voltick names and IB keep their capital. */
-const inSentence = (n: string) => (/^(Volt|Coil|Reversal|Flip|IB)\b/.test(n) ? n : n.charAt(0).toLowerCase() + n.slice(1))
+const inSentence = (n: string) => (/^(Volt|Coil|Reversal|Surge|Flip|IB)\b/.test(n) ? n : n.charAt(0).toLowerCase() + n.slice(1))
 
 export interface Armed {
   id: string
@@ -127,7 +134,7 @@ interface LevelRead {
 const reads = new Map<string, { at: number; p: Promise<LevelRead>; empty?: boolean }>()
 /** A read that came back with none of the GEX levels is re-tried after this, not held for 50 s. */
 const EMPTY_RETRY_MS = 5_000
-const GEX_KEYS = new Set(['volt', 'coil', 'reversal', 'flip'])
+const GEX_KEYS = new Set(['volt', 'coil', 'reversal', 'surge', 'flip'])
 
 async function readLevels(sym: string): Promise<LevelRead> {
   const r = resolveSym(sym)
@@ -144,7 +151,7 @@ async function readLevels(sym: string): Promise<LevelRead> {
   // Voltick's levels by the definition, off the front chain's live ladder, on the
   // page's GEX switch (gexBasis.ts; OI + vol until 2026-10-07)
   const gb = gexBasis()
-  let vt: { volt: number | null; coil: number | null; reversal: number | null } | null = null
+  let vt: { volt: number | null; coil: number | null; reversal: number | null; surge: number | null } | null = null
   let flip: number | null = null
   try {
     const ticker = r.fut === 'NQ' ? 'NDX' : r.fut === 'ES' ? 'SPX' : r.key
@@ -160,9 +167,11 @@ async function readLevels(sym: string): Promise<LevelRead> {
       const book = g.rows.map((x) => ({ strike: x.strike, net: chainValue(x.netGEX, x.netVolGEX, gb) }))
       flip = at(gb === 'oivol' ? g.flip : flipOf(book, g.spot))
       if (g.rows.length) {
-        // the index's own spot judges the sides: the strikes are the index's
-        const d = vtFromLadder(book, g.spot, gb === 'oivol' ? (g.core?.strike ?? null) : null)
-        vt = { volt: at(d.volt), coil: at(d.coil), reversal: at(d.reversal) }
+        // the chart's price moved onto the index's strikes judges the sides (the
+        // chain's own spot is stale before the cash open and overnight)
+        const spot = price != null && price > 0 ? price - shift : g.spot
+        const d = vtFromLadder(book, spot, gb === 'oivol' ? (g.core?.strike ?? null) : null, { coil: vtCoilOn() })
+        vt = { volt: at(d.volt), coil: at(d.coil), reversal: at(d.reversal), surge: at(d.surge) }
       }
     }
   } catch {
@@ -172,16 +181,22 @@ async function readLevels(sym: string): Promise<LevelRead> {
   // that left every level off the futures chart): the walls recorder's newest
   // slot, today's bars only, read the same way. The legend said "No levels" on
   // ES while the CB Walls study was drawing them (2026-10-07 audit).
-  if (!vt || (vt.volt == null && vt.coil == null && vt.reversal == null)) {
+  if (!vt || (vt.volt == null && vt.coil == null && vt.reversal == null && vt.surge == null)) {
     try {
       const w = await wallSeriesFor(sym, todays.length ? todays : bars.slice(-80), '5', true)
       const fin = (v: number) => Number.isFinite(v)
-      vt = vtFromWalls(last(w.core, fin), last(w.callWall, fin), last(w.putWall, fin), price)
+      vt = vtTermsFromWalls(last(w.core, fin), last(w.callWall, fin), last(w.putWall, fin), price)
     } catch {
       vt = null
     }
   }
-  out.push(vtLevel('volt', vt?.volt ?? null), vtLevel('coil', vt?.coil ?? null), vtLevel('reversal', vt?.reversal ?? null), vtLevel('flip', flip))
+  out.push(
+    vtLevel('volt', vt?.volt ?? null),
+    vtLevel('reversal', vt?.reversal ?? null),
+    vtLevel('surge', vt?.surge ?? null),
+    vtLevel('coil', vt?.coil ?? null),
+    vtLevel('flip', flip),
+  )
   // session: IB, overnight, open
   const rthToday = todays.filter(rth)
   const ib = rthToday.filter((b) => etMinutesOfDay(b.time) < 630)
@@ -208,7 +223,7 @@ async function readLevels(sym: string): Promise<LevelRead> {
 
 /** The levels for a symbol on the page's GEX switch, shared for 50 s. */
 export function levelsFor(sym: string, fresh = false): Promise<LevelRead> {
-  const key = `${sym}|${gexBasis()}`
+  const key = `${sym}|${gexBasis()}|${vtCoilOn() ? 'coil' : 'nocoil'}`
   const hit = reads.get(key)
   const age = hit ? Date.now() - hit.at : Infinity
   if (hit && age < (fresh ? 20_000 : 50_000) && !(hit.empty && age > EMPTY_RETRY_MS)) return hit.p
@@ -437,7 +452,7 @@ function bellIcon(off: boolean): SVGSVGElement {
 
 
 /** The order levels are listed in when nothing else decides it. */
-const LEVEL_ORDER = ['volt', 'coil', 'reversal', 'flip', 'ibh', 'ibl', 'onh', 'onl', 'open', 'pdh', 'pdl', 'pdc']
+const LEVEL_ORDER = ['volt', 'reversal', 'surge', 'coil', 'flip', 'ibh', 'ibl', 'onh', 'onl', 'open', 'pdh', 'pdl', 'pdc']
 const orderOf = (key: string) => {
   const i = LEVEL_ORDER.indexOf(key)
   return i < 0 ? LEVEL_ORDER.length : i
@@ -483,7 +498,7 @@ function saveTab(t: Tab): void {
 }
 
 const HINT =
-  'Tap a level to be told when price crosses it. A Volt, Coil, Reversal or Flip alert follows that level as it moves. Each fires once, then shows under Fired.'
+  'Tap a level to be told when price crosses it. A Volt, Reversal, Surge, Coil or Flip alert follows that level as it moves. Each fires once, then shows under Fired.'
 
 export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onChart: (chart?: Vela) => void; destroy: () => void } {
   const root = el('div', 'cb-lv')

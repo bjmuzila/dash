@@ -110,6 +110,27 @@ export function vtFromWalls(
   }
 }
 
+/**
+ * The Vela definition (data/voltickLevels.ts vtFromLadder, 2026-10-09) read off
+ * the three recorded walls. walls_log keeps only CORE, the call wall and the put
+ * wall, so:
+ *   · Volt     = CORE
+ *   · Reversal = the wall across spot from the Volt (the top net GEX there)
+ *   · Surge    = the wall on the Volt's side that is not the Volt — the only
+ *                other ranked strike walls_log holds
+ *   · Coil     = none: the log keeps no further strikes to size against the Volt
+ * The Level Log keeps vtFromWalls (Coil / Reversal) as it was.
+ */
+export function vtTermsFromWalls(
+  cb: number | null | undefined,
+  callWall: number | null | undefined,
+  putWall: number | null | undefined,
+  spot: number | null | undefined,
+): { volt: number | null; surge: number | null; reversal: number | null; coil: null } {
+  const vt = vtFromWalls(cb, callWall, putWall, spot)
+  return { volt: vt.volt, surge: vt.coil, reversal: vt.reversal, coil: null }
+}
+
 export type WallLogRow = {
   slot: number
   at: string

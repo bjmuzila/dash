@@ -96,7 +96,7 @@ export function setGexBasis(next: GexBasis): void {
   notify()
 }
 
-/** Called whenever the book changes (here or in another tab). Returns the unsubscribe. */
+/** Called whenever the book (or the Coil switch) changes, here or in another tab. Returns the unsubscribe. */
 export function onGexBasis(fn: () => void): () => void {
   subs.add(fn)
   return () => {
@@ -111,6 +111,53 @@ if (typeof window !== 'undefined') {
     const next = isGexBasis(e.newValue) ? e.newValue : GEX_BASIS_DEFAULT
     if (next === basis) return
     basis = next
+    notify()
+  })
+}
+
+// ── THE COIL SWITCH (2026-10-09, Brandon: "coil - half of volts weight (can be
+// turned on or off in settings)") ─────────────────────────────────────────────
+// One page-wide choice beside the GEX book, in the same menu: Coils named or not
+// on every Vela surface (Rail tags, Path beads, Key Levels, the legend card,
+// Level Alerts, the session strip). It rides the GEX switch's notify, so every
+// reader that follows the book repaints when it flips. Remembered per browser
+// under `cb-v3-vela-vt-coil`, followed live by other tabs. Default on.
+
+const COIL_KEY = 'cb-v3-vela-vt-coil'
+
+function readCoil(): boolean {
+  try {
+    return localStorage.getItem(COIL_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+let coilOn = readCoil()
+
+/** Are Coils named (the GEX menu's Coil switch)? */
+export function vtCoilOn(): boolean {
+  return coilOn
+}
+
+/** Flip the Coil switch for every indicator, remember it, and tell every reader. */
+export function setVtCoil(on: boolean): void {
+  if (on === coilOn) return
+  coilOn = on
+  try {
+    localStorage.setItem(COIL_KEY, on ? '1' : '0')
+  } catch {
+    /* private mode: it still applies for this visit */
+  }
+  notify()
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== COIL_KEY) return
+    const next = e.newValue !== '0'
+    if (next === coilOn) return
+    coilOn = next
     notify()
   })
 }

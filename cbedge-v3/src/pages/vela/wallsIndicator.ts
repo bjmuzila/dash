@@ -30,11 +30,13 @@
 //     on, else its recorded gamma sign, else the nearer wall.
 //   · "Walls only" drops the role model (nothing to resolve) and draws both
 //     walls on their own series; "Core only" draws CORE alone.
-//   · Voltick theme (always, on the Vela page, which pins it): three plain lines, ★ Volt / ◆ Coil / ↘ Reversal
-//     (Coil = a wall on the Volt's side of spot that is not the Volt; none on a
-//     bar where CORE sits on that wall)
-//     through vtFromWalls(), Volt drawn last so it shows on a shared strike —
-//     the migration chart's Voltick view, judged on each bar's close.
+//   · Voltick theme (always, on the Vela page, which pins it): plain lines,
+//     ★ Volt / ↯ Surge / ↘ Reversal by the 2026-10-09 definition, through
+//     vtTermsFromWalls() (Volt = CORE, Reversal = the wall across price, Surge
+//     = the other wall on the Volt's side; none on a bar where CORE sits on
+//     that wall), Volt drawn last so it shows on a shared strike, judged on each
+//     bar's close. walls_log keeps no more strikes, so ◆ Coil draws only where a
+//     ladder frame stands in (a future's overnight, below).
 //
 // ── Broken captures are dropped (2026-10-05) ────────────────────────────────
 // Now and then a scanner sweep reads a degenerate book (a chain that came back
@@ -107,7 +109,7 @@
 // On the desktop each chart's legend card (legend/legendCard.ts) is this study's
 // face: its LEVELS row reads the newest Volt / Coil / Reversal drawn here
 // (wallsNow, published on every render), its ◉ is this study's visibility, and
-// its level switches are the showVolt / showCoil / showRev inputs below.
+// its level switches are the showVolt / showSurge / showCoil / showRev inputs below.
 //
 // ── Reads ────────────────────────────────────────────────────────────────────
 // One /api/walls-range request per symbol + variant + depth, shared by every
@@ -131,7 +133,7 @@ import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { tokenHexAlpha } from '@/design/theme'
 import { uiThemeNow } from '@/design/uiTheme'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
-import { vtFromWalls } from '@/pages/levelLog/wallData'
+import { vtTermsFromWalls } from '@/pages/levelLog/wallData'
 import {
   SESSION_FROM_MIN,
   SOURCE_LEVELS,
@@ -197,7 +199,8 @@ function inputsSchema(): InputSchema[] {
     // One switch per Voltick level: the legend card's level settings (⚙ on its
     // LEVELS row) flip these, so the choice is saved with the chart like any input.
     { key: 'showVolt', title: 'Volt', type: 'bool', defval: true, tooltip: 'Draw the Volt line.' },
-    { key: 'showCoil', title: 'Coil', type: 'bool', defval: true, tooltip: 'Draw the Coil line.' },
+    { key: 'showSurge', title: 'Surge', type: 'bool', defval: true, tooltip: 'Draw the Surge line.' },
+    { key: 'showCoil', title: 'Coil', type: 'bool', defval: true, tooltip: 'Draw the Coil line (overnight ladder only: walls_log keeps no Coil).' },
     { key: 'showRev', title: 'Reversal', type: 'bool', defval: true, tooltip: 'Draw the Reversal line.' },
     // Style (2026-10-09): repaint only, never a re-read
     {
@@ -279,7 +282,7 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
 
 /** The Voltick lines the inputs leave switched on (line key → shown). */
 function shownOf(inputs: Record<string, InputValue>): Record<string, boolean> {
-  return { volt: inputs.showVolt !== false, coil: inputs.showCoil !== false, reversal: inputs.showRev !== false }
+  return { volt: inputs.showVolt !== false, surge: inputs.showSurge !== false, coil: inputs.showCoil !== false, reversal: inputs.showRev !== false }
 }
 
 // ── The levels NOW, for the legend card ──────────────────────────────────────
@@ -291,6 +294,7 @@ function shownOf(inputs: Record<string, InputValue>): Record<string, boolean> {
 
 export interface WallsNow {
   volt: number | null
+  surge: number | null
   coil: number | null
   reversal: number | null
 }
@@ -316,7 +320,7 @@ function publishNow(chartData: object, id: string, now: WallsNow | null): void {
   const prev = m.get(id)
   if (now) m.set(id, now)
   else m.delete(id)
-  if (prev?.volt === now?.volt && prev?.coil === now?.coil && prev?.reversal === now?.reversal) return
+  if (prev?.volt === now?.volt && prev?.surge === now?.surge && prev?.coil === now?.coil && prev?.reversal === now?.reversal) return
   for (const fn of nowSubs) fn()
 }
 
@@ -416,6 +420,7 @@ function latestBefore(dates: readonly string[], key: string, inclusive: boolean)
 /** The Voltick levels a futures night's ladder gives one bar. */
 interface NightVt {
   volt: number | null
+  surge: number | null
   coil: number | null
   reversal: number | null
 }
@@ -445,7 +450,7 @@ function nightLevels(
     const night = date != null ? nights.get(date) : undefined
     if (!night?.length) continue
     const f = ladderFrame(night, bar, tfMs, shiftAt, book)
-    if (f) out[i] = { volt: f.volt, coil: f.gates[0] ?? null, reversal: f.rev }
+    if (f) out[i] = { volt: f.volt, surge: f.surge, coil: f.gates[0] ?? null, reversal: f.rev }
   }
   return out
 }
@@ -551,20 +556,23 @@ function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings, look: Look, 
   // live document theme, not wallData's load-time read of the stored switch.
   if (uiThemeNow() === 'voltick') {
     const volt: (number | null)[] = []
+    const surge: (number | null)[] = []
     const coil: (number | null)[] = []
     const rev: (number | null)[] = []
     for (let i = 0; i < bars.length; i++) {
       // a future's overnight bar with a ladder column: the Path's levels (header)
-      const vt = night[i] ?? vtFromWalls(cb[i], cw[i], pw[i], bars[i]?.close)
+      const vt = night[i] ?? vtTermsFromWalls(cb[i], cw[i], pw[i], bars[i]?.close)
       volt.push(vt.volt)
+      surge.push(vt.surge)
       coil.push(vt.coil)
       rev.push(vt.reversal)
     }
-    // The migration chart's Voltick draw order: reversal, coil, then volt on top.
+    // Draw order: reversal, coil, surge, then volt on top.
     const out: Line[] = []
     if (s.view !== 'core') {
       out.push({ key: 'reversal', title: '↘ Reversal', color: tokenHexAlpha('--color-vt-reversal', a), width: WALL_W, values: rev })
       out.push({ key: 'coil', title: '◆ Coil', color: tokenHexAlpha('--color-vt-coil', a), width: WALL_W, values: coil })
+      out.push({ key: 'surge', title: '↯ Surge', color: tokenHexAlpha('--color-vt-surge', a), width: WALL_W, values: surge })
     }
     if (s.view !== 'walls') out.push({ key: 'volt', title: '★ Volt', color: tokenHexAlpha('--color-vt-volt', a), width: CORE_W, values: volt })
     return out
@@ -785,8 +793,8 @@ class WallsIndicator implements NativeIndicator {
       const l = all.find((x) => x.key === k)
       return l ? lastValue(l.values) : null
     }
-    const now = { volt: byKey('volt'), coil: byKey('coil'), reversal: byKey('reversal') }
-    publishNow(ctx.data, ctx.id, now.volt == null && now.coil == null && now.reversal == null ? null : now)
+    const now = { volt: byKey('volt'), surge: byKey('surge'), coil: byKey('coil'), reversal: byKey('reversal') }
+    publishNow(ctx.data, ctx.id, now.volt == null && now.surge == null && now.coil == null && now.reversal == null ? null : now)
     const shown = shownOf(this.inputs)
     const lines = all.filter((l) => shown[l.key] !== false && l.values.some((v) => v != null))
     const series: SeriesSpec[] = []
@@ -891,7 +899,7 @@ export function registerCbWalls(): void {
   registered = true
   registerNativeIndicator({
     type: WALLS_TYPE,
-    title: 'Voltick Walls · the walls migration (★ Volt / ◆ Coil / ↘ Reversal)',
+    title: 'Voltick Walls · the walls migration (★ Volt / ↯ Surge / ↘ Reversal / ◆ Coil)',
     shortTitle: 'Voltick Walls',
     paneHint: 'price',
     overlay: true,

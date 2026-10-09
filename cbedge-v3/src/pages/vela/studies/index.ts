@@ -168,13 +168,13 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: KEY_TYPE,
-      title: 'Voltick Key Levels · Volt, Coil, Reversal, Flip, max pain, weekly pivot & zones',
+      title: 'Voltick Key Levels · Volt, Reversal, Surge, Coil, Flip, max pain, weekly pivot & zones',
       shortTitle: 'Key Levels',
       pane: 'price',
       liveOnly: true,
       gex: true,
       inputs: () => [
-        { key: 'walls', title: '◆ Coil / ↘ Reversal', type: 'bool', defval: true },
+        { key: 'walls', title: '↘ Reversal / ↯ Surge / ◆ Coil', type: 'bool', defval: true },
         { key: 'core', title: '★ Volt (CORE, top net GEX)', type: 'bool', defval: true },
         { key: 'flip', title: 'Flip (gamma)', type: 'bool', defval: true },
         { key: 'maxPain', title: 'Max pain', type: 'bool', defval: true },

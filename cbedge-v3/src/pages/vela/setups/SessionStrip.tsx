@@ -11,14 +11,15 @@
 //                         04:00; none for an index)
 //   IB 17.5 · 0.8× avg    today's initial balance (09:30–10:30) against its
 //                         average over the last 20 sessions; "forming" until 10:30
-//   ★ VOLT +17.1 · ◆ COIL −7.9 · ↘ REV −32.9 · ⚡︎ FLIP +4.0
+//   ★ VOLT +17.1 · ↘ REV −32.9 · ↯ SURGE +5.0 · ◆ COIL −7.9 · ⚡︎ FLIP +4.0
 //                         PHONE ONLY: on the desktop each chart's legend card
 //                         (legend/legendCard.ts) carries the levels (Brandon,
 //                         2026-10-04). Distance from price to each Voltick level
-//                         (Level Alerts' read: the Volt is CORE, the top net GEX;
-//                         the Coil the 2nd top on the Volt's side of price; the
-//                         Reversal the top across price; the flip, all off the
-//                         front chain's live ladder), positive = above.
+//                         (Level Alerts' read, the 2026-10-09 definition: the Volt
+//                         is CORE, the top net GEX; the Reversal the top across
+//                         price; the Surge the next top that is neither; the Coil
+//                         a strike ≥ half the Volt; the flip, all off the front
+//                         chain's live ladder), positive = above.
 //                         Each mark DRAWN in its reserved colour (levelMarks.ts:
 //                         typed, Windows showed them as emoji), the word in Paper.
 //   EM ±41.2 · 62% used   the day's frozen expected move and how much of it the
@@ -52,7 +53,7 @@ interface Stats {
   prevClose: number | null
   on: { hi: number; lo: number } | null
   ib: { size: number; avg: number | null; forming: boolean } | null
-  levels: { volt: number | null; coil: number | null; reversal: number | null; flip: number | null }
+  levels: { volt: number | null; coil: number | null; reversal: number | null; surge: number | null; flip: number | null }
   em: DailyEmBand | null
 }
 
@@ -95,7 +96,7 @@ async function readStats(sym: string): Promise<{ stats: Stats; last: number | nu
   const pick = (k: string) => lv?.levels.find((l) => l.key === k)?.price ?? null
   const em = parseDailyEm(emJson)
   return {
-    stats: { sym, prevClose, on, ib, levels: { volt: pick('volt'), coil: pick('coil'), reversal: pick('reversal'), flip: pick('flip') }, em: em && em.date === today ? em : null },
+    stats: { sym, prevClose, on, ib, levels: { volt: pick('volt'), coil: pick('coil'), reversal: pick('reversal'), surge: pick('surge'), flip: pick('flip') }, em: em && em.date === today ? em : null },
     last,
   }
 }
@@ -104,11 +105,12 @@ const num = (v: number, d = 2) => v.toLocaleString('en-US', { minimumFractionDig
 const sgn = (v: number, d = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}`
 const toneCls = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-fg')
 
-/** Voltick's four levels as the strip names them: the drawn mark, the chip code. */
+/** Voltick's levels as the strip names them: the drawn mark, the chip code. */
 const VT_ITEMS: ReadonlyArray<{ key: MarkKey; code: string; name: string }> = [
   { key: 'volt', code: 'VOLT', name: 'Volt' },
-  { key: 'coil', code: 'COIL', name: 'Coil' },
   { key: 'reversal', code: 'REV', name: 'Reversal' },
+  { key: 'surge', code: 'SURGE', name: 'Surge' },
+  { key: 'coil', code: 'COIL', name: 'Coil' },
   { key: 'flip', code: 'FLIP', name: 'Flip' },
 ]
 

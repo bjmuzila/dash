@@ -565,7 +565,17 @@ const CHAINS_WARM_MS = 15 * 60_000;
 const CHAINS_CACHE = new Map(); // key → { at, status, text, lastAsk, ctx, refreshing }
 // Upstream pulls since boot, for /healthz — a refresh that keeps failing is
 // invisible from outside, because SWR keeps serving the last good snapshot.
-const CHAINS_STATS = { pulls: 0, fails: 0, lastFailAt: 0, lastFailStatus: 0 };
+const CHAINS_STATS = { pulls: 0, fails: 0, lastFailAt: 0, lastFailStatus: 0, lastFailError: '', lastFailTicker: '' };
+// What the last failed pull was, for the healthz note: a non-200 keeps its status,
+// a thrown fetch (status 0) keeps the socket's own reason (ECONNRESET, UND_ERR_…).
+function chainsNoteFail(ticker, status, err) {
+  CHAINS_STATS.pulls += 1;
+  CHAINS_STATS.fails += 1;
+  CHAINS_STATS.lastFailAt = Date.now();
+  CHAINS_STATS.lastFailStatus = status;
+  CHAINS_STATS.lastFailTicker = String(ticker || '');
+  CHAINS_STATS.lastFailError = err ? String(err?.cause?.code || err?.code || err?.cause?.message || err?.message || err).slice(0, 120) : '';
+}
 
 function chainsSlimLeg(l) {
   if (!l || typeof l !== 'object') return l;
@@ -612,13 +622,13 @@ function chainsRefresh(key, ticker, sp, ctx) {
   e.ctx = ctx;
   e.refreshing = chainsPull(ctx, ticker, sp)
     .then((r) => {
-      CHAINS_STATS.pulls += 1;
-      if (r.status !== 200) { CHAINS_STATS.fails += 1; CHAINS_STATS.lastFailAt = Date.now(); CHAINS_STATS.lastFailStatus = r.status; }
+      if (r.status !== 200) chainsNoteFail(ticker, r.status, null);
+      else CHAINS_STATS.pulls += 1;
       // Only a good answer replaces the snapshot; a failed refresh keeps serving the last one.
       if (r.status === 200 || !e.text) { e.status = r.status; e.text = r.text; e.at = Date.now(); }
       return e;
     }, (err) => {
-      CHAINS_STATS.pulls += 1; CHAINS_STATS.fails += 1; CHAINS_STATS.lastFailAt = Date.now(); CHAINS_STATS.lastFailStatus = 0;
+      chainsNoteFail(ticker, 0, err);
       throw err;
     })
     .finally(() => { e.refreshing = null; });
@@ -657,7 +667,15 @@ healthProbe('chains', () => {
     pulls: CHAINS_STATS.pulls, fails: CHAINS_STATS.fails,
     lastFailAgeSec: CHAINS_STATS.lastFailAt ? Math.round((now - CHAINS_STATS.lastFailAt) / 1000) : null,
     lastFailStatus: CHAINS_STATS.lastFailStatus || null,
-    problems: failing || recentFail ? [{ code: 'upstream-failing', note: `${failing} key(s) on a non-200, last fail ${CHAINS_STATS.lastFailStatus || 'network'}` }] : [],
+    lastFailError: CHAINS_STATS.lastFailError || null,
+    lastFailTicker: CHAINS_STATS.lastFailTicker || null,
+    // Plain words: how many keys are failing NOW, and what the last failure was.
+    // "0 now" with a recent fail = one refresh blipped and the next one recovered
+    // (SWR kept serving the last good snapshot the whole time).
+    problems: failing || recentFail ? [{
+      code: 'upstream-failing',
+      note: `${failing ? `${failing} key(s) failing now` : 'none failing now'} · last fail ${Math.round((now - CHAINS_STATS.lastFailAt) / 1000)}s ago on ${CHAINS_STATS.lastFailTicker || '?'}: ${CHAINS_STATS.lastFailStatus ? `HTTP ${CHAINS_STATS.lastFailStatus}` : `network${CHAINS_STATS.lastFailError ? ` (${CHAINS_STATS.lastFailError})` : ''}`}`,
+    }] : [],
   };
 });
 
@@ -8058,6 +8076,36 @@ if (libDb) {
     /** Today's heatmap is rebuilt in full this often; between, only new minutes are read. */
     const HEATMAP_FULL_MS = 10 * 60_000;
     const heatmapCache = new Map(); // module-level within this route's closure
+    // ONE QUERY PER QUESTION AT A TIME (2026-10-09). On a busy morning the same
+    // session's ladder read (5–9 s each in the slow-query log, Postgres at ~150%
+    // CPU) was being run several times AT ONCE: every chart, card and user whose
+    // 30 s cache entry lapsed together — and every cache key that differs only by
+    // `top` or the fallback flag — fired its own copy, and each copy slowed the
+    // others. Now concurrent callers asking the database the same thing share one
+    // in-flight promise. Results are only read (buildColumns maps them), so sharing
+    // the arrays is safe. The expiry lookup for a date (a per-row timezone count
+    // over the whole day) is also held briefly: a past date never changes, and
+    // today's answer only moves at the close.
+    const heatmapFlights = new Map();
+    const oneFlight = (key, fn) => {
+      let p = heatmapFlights.get(key);
+      if (!p) {
+        p = Promise.resolve().then(fn).finally(() => heatmapFlights.delete(key));
+        heatmapFlights.set(key, p);
+      }
+      return p;
+    };
+    const expiriesHeld = new Map(); // `${date}|${symbol}` → { at, rows }
+    const expiriesFor = async (date, symbol) => {
+      const k = `${date}|${symbol}`;
+      const hit = expiriesHeld.get(k);
+      const ttl = date < todayET() ? 6 * 3_600_000 : 120_000;
+      if (hit && Date.now() - hit.at < ttl) return hit.rows;
+      const rows = await oneFlight(`exp|${k}`, () => libDb.getGexHistoryExpiriesForDate(date, symbol));
+      if (expiriesHeld.size > 100) expiriesHeld.clear();
+      expiriesHeld.set(k, { at: Date.now(), rows });
+      return rows;
+    };
 
     /**
      * ?fmt=c — the COMPACT heatmap (2026-10-07 audit: a Vela day read at top=30
@@ -8322,7 +8370,7 @@ if (libDb) {
                 && Date.now() - (cached.fullAt || 0) < HEATMAP_FULL_MS) {
               const prevCols = cached.payload.columns;
               const since = prevCols[prevCols.length - 1].slotTs - 60_000;
-              const fresh = await libDb.getOptionStrikeGexSlotsSince(date, cached.payload.expiry, symbol, since);
+              const fresh = await oneFlight(`since|${date}|${cached.payload.expiry}|${symbol}|${since}`, () => libDb.getOptionStrikeGexSlotsSince(date, cached.payload.expiry, symbol, since));
               const columns = [...prevCols.filter((c) => c.slotTs < since), ...buildColumns(fresh)];
               const payload = { ...cached.payload, columns };
               heatmapCache.set(cacheKey, { at: Date.now(), fullAt: cached.fullAt, payload });
@@ -8336,7 +8384,7 @@ if (libDb) {
             // guess between "wrong expiry" and "recorder never ran".
             let recordedExpiries = [];
             if (expiryFallback) {
-              const recorded = await libDb.getGexHistoryExpiriesForDate(date, symbol);
+              const recorded = await expiriesFor(date, symbol);
               recordedExpiries = recorded.map((r) => r.expiry);
               const asked = recorded.find((r) => r.expiry === expiry);
               if (!asked || asked.rthRows === 0) {
@@ -8351,7 +8399,7 @@ if (libDb) {
               ? anyExpiry
                 ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
                 : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
-              : await libDb.getOptionStrikeGexSlots(date, usedExpiry, symbol);
+              : await oneFlight(`slots|${date}|${usedExpiry}|${symbol}`, () => libDb.getOptionStrikeGexSlots(date, usedExpiry, symbol));
             const columns = buildColumns(slots);
             const payload = {
               mode: 'heatmap', symbol, columns,

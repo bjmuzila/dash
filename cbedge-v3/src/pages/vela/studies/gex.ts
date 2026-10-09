@@ -10,8 +10,8 @@
 //                  Key Levels card's weekly EM) as two price lines.
 //   Key Levels     what the Key Levels card lists, as price lines with axis
 //                  chips, in Voltick's names (the page is Voltick's chart):
-//                  ★ Volt (CORE, the top net GEX), ◆ Coil (the 2nd top on the
-//                  Volt's side of spot), ↘ Reversal (the top across spot), ⚡︎ Flip,
+//                  ★ Volt (CORE, the top net GEX), ↘ Reversal (the top across
+//                  price), ↯ Surge (the next top), ◆ Coil (≥ half the Volt), ⚡︎ Flip,
 //                  Max Pain off the front-expiry chain (/api/chains →
 //                  board/chainGex.ts), and this week's published pivot and
 //                  lower / upper zones (/api/levels — the levels CB Edge posts).
@@ -36,7 +36,7 @@ import { query } from '@/data/api'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
 import { DAY_MS, bool, studyImpl, etDateKey, int, labelAt, money, priceLineOf, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
 import { EM_TYPE, GEX_BASIS as BASIS, KEY_TYPE, PROFILE_TYPE } from './index'
-import { chainValue, flipOf, gexBasis } from '@/pages/vela/gexBasis'
+import { chainValue, flipOf, gexBasis, vtCoilOn } from '@/pages/vela/gexBasis'
 import { columnAt, loadLadder, sessionDates, type Ladder } from './ladder'
 
 /** Voltick's flip mark: ⚡ + VS15, so it draws as TEXT in the flip's colour, never
@@ -260,18 +260,23 @@ export const keyImpl = studyImpl<KeyS, KeyData>({
         // the name beside the line, at the newest bar
         if (lastBar) labels.push(labelAt(T, `tag-${key}`, lastBar.time, v + sh, `${title} ${(v + sh).toFixed(2)}`, col, { textColor: col, noFill: true }))
       }
-      // Voltick's levels by the definition (data/voltickLevels.ts vtFromLadder),
-      // off this chain's live ladder on the page's GEX switch (gexBasis.ts):
-      // ★ Volt = CORE, the top net GEX; ◆ Coil = the 2nd top net GEX on the Volt's
-      // side of spot; ↘ Reversal = the top net GEX on the other side. The gamma
-      // flip is ⚡︎ Flip in its violet. The chain's own CORE and flip are OI + Vol,
-      // so on another book both come from the rows instead.
+      // Voltick's levels by the definition (data/voltickLevels.ts vtFromLadder,
+      // 2026-10-09), off this chain's live ladder on the page's GEX switch
+      // (gexBasis.ts): ★ Volt = CORE, the top net GEX; ↘ Reversal = the top net
+      // GEX across price from the Volt; ↯ Surge = the next top that is neither;
+      // ◆ Coil = every other strike ≥ half the Volt (the GEX menu's Coil switch).
+      // The sides are judged at the chart's price moved onto the index's strikes
+      // (the chain's spot is stale before the cash open). The gamma flip is ⚡︎
+      // Flip in its violet. The chain's own CORE and flip are OI + Vol, so on
+      // another book both come from the rows instead.
       const gb = gexBasis()
       const book = g.rows.map((x) => ({ strike: x.strike, net: chainValue(x.netGEX, x.netVolGEX, gb) }))
-      const vt = vtFromLadder(book, g.spot, gb === 'oivol' ? (g.core?.strike ?? null) : null)
+      const spot = lastBar && Number.isFinite(lastBar.close) && lastBar.close > 0 ? lastBar.close - sh : g.spot
+      const vt = vtFromLadder(book, spot, gb === 'oivol' ? (g.core?.strike ?? null) : null, { coil: vtCoilOn() })
       const flip = gb === 'oivol' ? g.flip : flipOf(book, g.spot)
       if (s.walls) {
-        add('coil', vt.coil, '--color-vt-coil', '◆ Coil', { width: 1.6 })
+        vt.coils.forEach((k, i) => add(`coil${i ? i : ''}`, k, '--color-vt-coil', '◆ Coil', { width: 1.6 }))
+        add('surge', vt.surge, '--color-vt-surge', '↯ Surge', { width: 1.6 })
         add('rev', vt.reversal, '--color-vt-reversal', '↘ Reversal', { width: 1.6 })
       }
       if (s.core) add('core', vt.volt, '--color-vt-volt', '★ Volt', { width: 2 })
