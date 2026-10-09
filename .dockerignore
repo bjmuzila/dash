@@ -45,3 +45,34 @@ cbedge-v3/dist-vela
 # see the demo-sites compose service) — keep client previews out of the
 # dashboard image built by `COPY . .`.
 demo-sites
+
+# Build-context trim (2026-10-08). Every push sends the whole repo to the
+# dashboard build (`COPY . .`), and that copy was taking ~30s. Everything below
+# was checked: nothing in app/, components/, lib/, server-v2/, middleware.ts or
+# next.config.js reads these at runtime (references are comments only).
+#   - gex_strike_history.csv is 61MB on its own; the other root CSVs are
+#     one-off research exports. NOT excluded: "ESU6 - 5 min - RTH.csv" (read by
+#     server-v2/backfill-tpo-from-csv.js), data/, analyze/, "md files/" and the
+#     CHANGELOG*.md files (the What's New / changelog pages read those).
+#   - The research folders, archives and patches are laptop-only scratch.
+gex_strike_history.csv
+gex_preview_history.csv
+gex_eod_history.csv
+gex7420.csv
+patterns_12h_*.csv
+analyze_12h_patterns.py
+Claude outputs
+backtest-core-level
+backtest-noise-momentum
+Vanilla
+_to_delete
+outputs
+owner-vite.tar.gz
+mobile-build.bundle
+*.patch
+# Nested node_modules (e.g. app-vite/node_modules left over from running it on
+# the VPS host). The Dockerfile always runs its own Linux npm install for
+# app-vite, and a stray host copy can carry the wrong platform binaries (the
+# same Windows-lockfile problem described in the Dockerfile).
+app-vite/node_modules
+app-vite/dist

@@ -22,7 +22,9 @@ COPY cbedge-v3/ ./
 #   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD   the devDep's ~150MB Chromium is never used here
 #   check:theme                 the one gate that catches a push made without building
 # build:vela, not `build`: budgets are a commit-time check, never a deploy one.
-RUN rm -f package-lock.json \
+# npm download cache persists on the VPS between builds (not baked into the image).
+RUN --mount=type=cache,target=/root/.npm \
+    rm -f package-lock.json \
  && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
  && npm run check:theme \
  && npm run build:vela \

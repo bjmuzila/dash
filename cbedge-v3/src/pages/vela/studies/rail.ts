@@ -571,13 +571,21 @@ class RailLayer implements RendererLayerInstance {
     const placed: number[] = []
     /** Heatmap: each shown row's top (its translateY) and colour, for the strip. */
     const shown: { top: number; color: string }[] = []
-    /** Profile: every strike on screen, hidden rows included (the shape has no overlap to avoid). */
+    /** Profile: every strike on screen and past its edges, hidden rows included (the shape has no overlap to avoid). */
     const shape: { y: number; r: RailRowOut }[] = []
     for (const strike of d.order) {
       const node = this.nodes.get(strike)
       if (!node) continue
       const y = coords.priceToY(priceOf.get(strike)!, scale, bounds)
-      if (d.profile && Number.isFinite(y) && y >= top - ROW_H && y <= bottom + ROW_H) {
+      // EVERY STRIKE, NOT JUST THE ONES ON SCREEN (2026-10-08, Brandon: "gex rail
+      // still not showing all strikes. I have to scroll up or down or adjust the
+      // axis to get it to show"): the shape used to be built from the strikes in
+      // view only, so a strike just past the top or bottom of the chart was not in
+      // it and the shape stopped short (tapering to nothing at the last strike on
+      // screen) until a pan brought that strike in. It now runs through the ladder's
+      // strikes beyond the edges too (within a few screen heights, enough for the
+      // curve), and the SVG's own box clips it to the rail.
+      if (d.profile && Number.isFinite(y) && y >= top - 4 * bounds.height && y <= bottom + 4 * bounds.height) {
         const r = d.rows.find((x) => x.strike === strike)
         if (r) shape.push({ y, r })
       }
@@ -667,11 +675,15 @@ class RailLayer implements RendererLayerInstance {
       .filter((p) => p.r.lead && LEAD_FILL[p.r.lead])
       .map((p) => `<line x1="${n(x0)}" x2="${n(left ? PROFILE_END : W - PROFILE_END)}" y1="${n(p.y)}" y2="${n(p.y)}" style="stroke:${LEAD_FILL[p.r.lead!]}" stroke-width="2"/>`)
       .join('')
+    // clipped below the header, so a strike past the top never runs under the name and net
     const markup =
-      `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="${n(H)}" gradientUnits="userSpaceOnUse">${stops.join('')}</linearGradient></defs>` +
+      `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="${n(H)}" gradientUnits="userSpaceOnUse">${stops.join('')}</linearGradient>` +
+      `<clipPath id="${id}-c"><rect x="0" y="${n(topY)}" width="${W}" height="${n(Math.max(0, H - topY))}"/></clipPath></defs>` +
+      `<g clip-path="url(#${id}-c)">` +
       `<path d="${path}" fill="url(#${id})"/>` +
       `<path d="${path}" fill="none" stroke="url(#${id})" stroke-width="1"/>` +
-      lines
+      lines +
+      `</g>`
     if (markup !== this.profileSvg) {
       this.profileSvg = markup
       svg.setAttribute('width', String(W))
