@@ -44,6 +44,18 @@ let desired: string[] = []
 let reconnectAttempt = 0
 let started = false
 let disposed = false
+/**
+ * LAZY mode (2026-10-09 audit) — startSocket({ lazy: true }), used by the
+ * standalone Vela build. The board needs the boot firehose; Vela does not. Its
+ * only socket consumer is the ES / NQ futures tail, so an eager, unscoped
+ * connection meant every Vela tab received every GEX, flow and status frame
+ * all session, parsed each one, and wrote it to IndexedDB every few seconds —
+ * for a cash-only layout, all of it unread. In lazy mode:
+ *   • nothing connects until something subscribes, and the first connection is
+ *     already SCOPED to what was subscribed (never the firehose);
+ *   • frames are not persisted to, or restored from, IndexedDB.
+ */
+let lazy = false
 
 /**
  * Which connection attempt is the CURRENT one.
@@ -70,9 +82,20 @@ let stableTimer: ReturnType<typeof setTimeout> | null = null
 let pendingWs: WebSocket | null = null
 
 /** Called once from main.tsx, before the first render. */
-export function startSocket(): void {
+export function startSocket(opts: { lazy?: boolean } = {}): void {
   if (started) return
   started = true
+  lazy = !!opts.lazy
+
+  if (lazy) {
+    // No boot connection and no IndexedDB replay: connect on first subscribe.
+    onActiveTypesChange((types) => {
+      desired = types.filter((t) => !BROADCAST_ONLY.has(t))
+      scheduleScope()
+    })
+    watchForWake()
+    return
+  }
 
   const b = boot()
 
@@ -213,7 +236,7 @@ function ingest(raw: unknown): void {
   if (!isFrame(parsed)) return
   if (parsed.type === 'snapshot') fanOutSnapshot(parsed)
   write(parsed.type, parsed)
-  persist(parsed.type, parsed)
+  if (!lazy) persist(parsed.type, parsed)
 }
 
 /**
@@ -242,7 +265,7 @@ function fanOutSnapshot(frame: { symbol?: string; ts?: number; data?: unknown })
   const put = (type: string, data: unknown) => {
     const synthetic = { type, symbol: frame.symbol, ts: frame.ts, data }
     write(type, synthetic)
-    persist(type, synthetic)
+    if (!lazy) persist(type, synthetic)
   }
 
   if (Array.isArray(d.gexRows) && d.gexRows.length) {
@@ -297,7 +320,9 @@ function scheduleScope(): void {
 
   // Widening (we need frames we are not receiving) is urgent. Narrowing is a
   // pure bandwidth optimisation and can wait.
-  const widening = currentTopics === null ? false : !isSubset(next, currentTopics)
+  // Lazy mode has no boot connection: the first scope IS the first connection,
+  // so it is as urgent as a widening.
+  const widening = currentTopics === null ? lazy : !isSubset(next, currentTopics)
   const delay = widening ? WIDEN_MS : NARROW_MS
 
   if (pendingScope) clearTimeout(pendingScope)
@@ -490,6 +515,9 @@ export function socketState(): { ready: number; topics: string[] | null; attempt
  */
 export function reconnectSocket(): void {
   if (disposed || !started) return
+  // Lazy and nothing subscribed yet: there is no connection to renew, and a
+  // reconnect here would open the unscoped firehose lazy mode exists to avoid.
+  if (lazy && currentTopics === null) return
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null

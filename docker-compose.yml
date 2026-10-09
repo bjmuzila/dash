@@ -29,6 +29,15 @@ services:
       # Turn the split on/off with the two lines in /opt/dashboard/.env —
       # see the `jobs` service below. Never set PROCESS_ROLE in .env.local.
       PROCESS_ROLE: ${DASHBOARD_ROLE:-all}
+      # Heap cap below the container cap, so a leak ends in a clean V8 OOM
+      # exit + restart instead of the kernel OOM-killer picking a neighbour
+      # (most likely Postgres, the biggest process on the box). 2026-10-09.
+      NODE_OPTIONS: --max-old-space-size=3072
+    mem_limit: 5g
+    stop_grace_period: 20s
+    labels:
+      # Restarted by `autoheal` (below) if its healthcheck stays failing.
+      autoheal: "true"
     volumes:
       # discord-relay dedupe state. Must outlive the container: without this the
       # seen-set resets on every redeploy, the relay re-primes from the current
@@ -110,6 +119,33 @@ services:
   # stop, exec, images, volumes, networks, etc. all stay off, so the worst this
   # can do is bounce a container. Not published to the host — only reachable
   # from sibling containers on the compose network.
+  # ── autoheal (2026-10-09) ─────────────────────────────────────────────────
+  # `restart: unless-stopped` only acts when a process EXITS. A process that is
+  # alive but wedged (event loop stuck, socket listener dead) fails its
+  # healthcheck and Docker merely labels it "unhealthy" — nothing restarts it.
+  # This restarts any container labelled `autoheal=true` once it is unhealthy:
+  # dashboard, jobs, vela-web. It talks to Docker only through docker-proxy,
+  # which allows listing and RESTART and nothing else (no start/stop/exec).
+  # The dashboard is unhealthy only after 3 failed checks 30s apart, so a
+  # restart means ~90s of a dead /proxy/health, not one slow moment.
+  autoheal:
+    # `latest` on purpose: the only tagged release (1.2.0, 2021) turns
+    # tcp:// into HTTPS + client certs, which cannot talk to docker-proxy's
+    # plain HTTP. Current builds map tcp:// to http://. After the first pull,
+    # pin it: docker inspect --format '{{index .RepoDigests 0}}' willfarrell/autoheal
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    restart: unless-stopped
+    environment:
+      DOCKER_SOCK: tcp://docker-proxy:2375
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 300
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 20
+    mem_limit: 64m
+    depends_on:
+      - docker-proxy
+
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: docker-proxy
@@ -551,6 +587,8 @@ services:
     cpus: "1.5"
     mem_limit: 2g
     stop_grace_period: 20s
+    labels:
+      autoheal: "true"
     healthcheck:
       # No HTTP of its own to probe: the process writes /tmp/jobs-heartbeat
       # every 30s once its jobs have started.
@@ -575,6 +613,17 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8091:8091"
+    mem_limit: 256m
+    labels:
+      autoheal: "true"
+    # The one page nginx serves without asking the dashboard, so this checks
+    # vela-web itself, not the backend behind it (2026-10-09).
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/denied.html"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # journal.cbedge.net — LuxAlgo's open-source Trade Journal (MIT), self-hosted.
   # Opened from Vela's top bar (the Journal button beside Workspace,

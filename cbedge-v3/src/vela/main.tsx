@@ -15,13 +15,14 @@ import VelaApp from '@/vela/VelaApp'
 // vela.html). The twin of src/main.tsx minus the board: same tokens, same
 // socket, same theme boot, then VelaApp instead of App.
 //
-// The socket opens at module scope for the same reason main.tsx does it there:
-// Vela's ES / NQ tail reads the futures frames through watchFrame, and the
-// sooner the connection is up the sooner the last bar fills. vela.html carries
-// an EMPTY boot record, so this is a plain connect, not a hand-off.
+// The socket starts LAZY (2026-10-09): Vela's only socket consumer is the ES /
+// NQ futures tail (cbedgeProvider.ts, through watchFrame), so the connection
+// opens when the first futures chart subscribes, already scoped to those
+// frames — never the unscoped boot firehose the board uses — and a cash-only
+// layout never opens one at all. See LAZY in data/socket.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-startSocket()
+startSocket({ lazy: true })
 
 // Applies the stored palette before the first paint. Vela then pins Voltick on
 // mount (pinUiTheme in pages/Vela.tsx), so this only covers the first frames.
