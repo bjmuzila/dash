@@ -64,7 +64,7 @@
 
 import type { BarRange, DataProvider, OHLCV, ProviderInfo, SymbolDescriptor, SymbolInfo } from '@luxalgo/vela'
 import { query } from '@/data/api'
-import { watchFrame } from '@/data/hooks'
+import { watchFrame, watchWake } from '@/data/hooks'
 import {
   LIVE_FALLBACK_MS,
   LIVE_QUIET_MS,
@@ -1052,10 +1052,14 @@ export class CbEdgeProvider implements DataProvider {
       const unsub = watchFrame<{ data?: unknown }>(frame, (f) => {
         for (const m of frameBars(f?.data)) push(m)
       })
+      // After a sleep or a network change the socket reconnects (data/socket.ts)
+      // but the minutes in between never arrive as frames. Re-read them.
+      const unwake = watchWake(() => void catchUp())
       return () => {
         stopped = true
         unfeed()
         unsub()
+        unwake()
       }
     }
 
@@ -1164,13 +1168,24 @@ export class CbEdgeProvider implements DataProvider {
       if (away > CATCH_UP_AFTER_MS) void catchUp()
     }
 
+    // Sleep / network change (watchWake in data/hooks.ts): the stream may be
+    // half-open and the minutes in between are gone. Reopen and re-read.
+    const onWake = () => {
+      if (stopped || document.hidden) return
+      halt()
+      start()
+      void catchUp()
+    }
+
     onVis()
     document.addEventListener('visibilitychange', onVis)
+    const unwake = watchWake(onWake)
     return () => {
       stopped = true
       unfeed()
       halt()
       document.removeEventListener('visibilitychange', onVis)
+      unwake()
     }
   }
 }

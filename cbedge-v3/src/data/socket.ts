@@ -101,6 +101,63 @@ export function startSocket(): void {
 
   // Do not scope anything until the first route has finished mounting.
   setTimeout(scheduleScope, SETTLE_MS)
+
+  // 4. Recover after sleep / network change.
+  watchForWake()
+}
+
+// ── Wake / network recovery (2026-10-09 audit) ──────────────────────────────
+//
+// A laptop that sleeps with the app open wakes with a TCP connection the OS
+// still believes is open and the server dropped minutes ago. Nothing fires —
+// no close, no error — so the ES/NQ chart sat frozen until the OS timed the
+// socket out, which can take minutes. A Wi-Fi switch does the same.
+//
+// There is no app-level heartbeat to time out on (the server's pings are
+// protocol frames the page never sees, and a quiet scope on a weekend sends
+// nothing for a long time), so this watches for the CAUSES instead:
+//   • the wall clock jumping — a 5s timer that wakes up much later than 5s
+//     means the machine was asleep (hidden tabs are throttled to ~1/min, so
+//     the threshold is wider there);
+//   • the browser's `online` event.
+// Either one reconnects at the same scope and broadcasts `cb:wake`, which the
+// chart providers use to re-read the minutes they missed.
+const WAKE_TICK_MS = 5_000
+const WAKE_GAP_VISIBLE_MS = 30_000
+const WAKE_GAP_HIDDEN_MS = 150_000
+const WAKE_MIN_INTERVAL_MS = 10_000
+let lastWakeAt = 0
+
+export const WAKE_EVENT = 'cb:wake'
+
+function watchForWake(): void {
+  if (typeof window === 'undefined') return
+  let lastTick = Date.now()
+  setInterval(() => {
+    const now = Date.now()
+    const gap = now - lastTick
+    lastTick = now
+    const limit = document.hidden ? WAKE_GAP_HIDDEN_MS : WAKE_GAP_VISIBLE_MS
+    if (gap > limit) onWake('sleep')
+  }, WAKE_TICK_MS)
+  // A tab coming back from the background is not a wake by itself — reset the
+  // clock so the throttled hidden ticks are not read as a sleep.
+  document.addEventListener('visibilitychange', () => {
+    lastTick = Date.now()
+  })
+  window.addEventListener('online', () => onWake('online'))
+}
+
+function onWake(reason: 'sleep' | 'online'): void {
+  const now = Date.now()
+  if (now - lastWakeAt < WAKE_MIN_INTERVAL_MS) return
+  lastWakeAt = now
+  reconnectSocket()
+  try {
+    window.dispatchEvent(new CustomEvent(WAKE_EVENT, { detail: { reason } }))
+  } catch {
+    /* an old browser without CustomEvent still gets the reconnect */
+  }
 }
 
 /**

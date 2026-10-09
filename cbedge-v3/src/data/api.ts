@@ -39,6 +39,37 @@ interface Entry {
 const cache = new Map<string, Entry>()
 const DEFAULT_STALE_MS = 30_000
 
+// ── Limits (2026-10-09 audit) ────────────────────────────────────────────────
+// TIMEOUT: a request that never answers used to stay `inflight` forever, and
+// every later caller of the same URL was handed that same dead promise — a
+// chart that hit a stalled backend stayed blank until a reload. Past this, the
+// fetch is aborted, the entry records the error, and the next call refetches.
+// Generous on purpose: the slowest legitimate reads (a cold heatmap day) take
+// several seconds.
+const QUERY_TIMEOUT_MS = 30_000
+// CAP: entries were never evicted, and date- and symbol-keyed URLs mint new
+// ones all day, so a tab left open for a session only grew. Oldest-touched go
+// first; anything still in flight is never dropped.
+const MAX_ENTRIES = 600
+
+function remember(url: string, entry: Entry): void {
+  cache.delete(url) // re-insert so Map order is least-recently-written first
+  cache.set(url, entry)
+  if (cache.size <= MAX_ENTRIES) return
+  for (const [key, hit] of cache) {
+    if (cache.size <= MAX_ENTRIES) break
+    if (!hit.inflight) cache.delete(key)
+  }
+}
+
+function withTimeout(signal: AbortSignal | undefined): AbortSignal | undefined {
+  if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return signal
+  const timeout = AbortSignal.timeout(QUERY_TIMEOUT_MS)
+  if (!signal) return timeout
+  const any = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any
+  return typeof any === 'function' ? any([signal, timeout]) : signal
+}
+
 export interface QueryOpts {
   /** How long a cached value is served without refetching. Default 30s. */
   staleMs?: number
@@ -74,21 +105,24 @@ export function query<T>(url: string, opts: QueryOpts = {}): Promise<T> {
     if (hit.error === null && now - hit.at < staleMs) return Promise.resolve(hit.value as T)
   }
 
-  const inflight = fetch(url, { signal: opts.signal, credentials: 'same-origin' })
+  const inflight = fetch(url, { signal: withTimeout(opts.signal), credentials: 'same-origin' })
     .then(async (res) => {
       if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${url}`)
       return (await res.json()) as T
     })
     .then((value) => {
-      cache.set(url, { at: Date.now(), value, inflight: null, error: null })
+      remember(url, { at: Date.now(), value, inflight: null, error: null })
       return value
     })
     .catch((err: Error) => {
-      cache.set(url, { at: Date.now(), value: undefined, inflight: null, error: err })
+      // Keep the last good value: an error entry used to wipe it, so a
+      // component that re-read the cache after one failed refresh lost the
+      // data it was already showing.
+      remember(url, { at: Date.now(), value: hit?.value, inflight: null, error: err })
       throw err
     })
 
-  cache.set(url, { at: now, value: hit?.value, inflight, error: null })
+  remember(url, { at: now, value: hit?.value, inflight, error: null })
   return inflight as Promise<T>
 }
 

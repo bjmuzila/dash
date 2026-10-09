@@ -28,19 +28,27 @@ startSocket()
 bootUiTheme()
 
 // A deploy replaces the hashed chunks; a tab opened before it asks for a chunk
-// that no longer exists. Reload ONCE per session to pick up the new build — the
-// same handler src/main.tsx installs, under its own key so a reload spent on one
-// host is not mistaken for one spent on the other.
+// that no longer exists. Reload to pick up the new build — the same handler
+// src/main.tsx installs, under its own key so a reload spent on one host is not
+// mistaken for one spent on the other.
+//
+// At most once per RELOAD_GAP_MS, not once per session (2026-10-09). Vela stays
+// open all day and some days carry several deploys; with a once-per-session
+// guard, the second deploy left lazy chunks (studies, legend, picker) failing
+// until a manual reload. The gap still stops a reload loop if a chunk is
+// genuinely missing from the new build too.
 const RELOADED_KEY = 'cb-vela-stale-chunk-reloaded'
+const RELOAD_GAP_MS = 10 * 60_000
 window.addEventListener('vite:preloadError', (e) => {
-  let already = true
+  let recent = true
   try {
-    already = sessionStorage.getItem(RELOADED_KEY) === '1'
-    if (!already) sessionStorage.setItem(RELOADED_KEY, '1')
+    const last = Number(sessionStorage.getItem(RELOADED_KEY) || 0)
+    recent = Number.isFinite(last) && last > 0 && Date.now() - last < RELOAD_GAP_MS
+    if (!recent) sessionStorage.setItem(RELOADED_KEY, String(Date.now()))
   } catch {
     /* private mode: treat as already tried rather than looping */
   }
-  if (already) return
+  if (recent) return
   e.preventDefault()
   window.location.reload()
 })

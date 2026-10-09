@@ -15,6 +15,7 @@
 
 import { useCallback, useRef, useSyncExternalStore } from 'react'
 import { read, subscribe } from './store'
+import { WAKE_EVENT } from './socket'
 
 /** Subscribe to a whole frame. Re-renders on every message of that type. */
 export function useFrame<T>(type: string): T | undefined {
@@ -72,4 +73,20 @@ export function watchFrame<T>(type: string, fn: (frame: T | undefined) => void):
   const unsub = subscribe(type, () => fn(read(type) as T | undefined))
   fn(read(type) as T | undefined)
   return unsub
+}
+
+/**
+ * Run `fn` after the machine wakes from sleep or the network comes back
+ * (2026-10-09). The socket has already been reconnected when this fires; the
+ * caller's job is to re-read whatever it missed in between — a chart's gap,
+ * a list that went stale. Returns an unsubscribe fn.
+ *
+ * Pages use this rather than the socket module itself (they never touch the
+ * socket). The event is broadcast by data/socket.ts.
+ */
+export function watchWake(fn: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  const handler = () => fn()
+  window.addEventListener(WAKE_EVENT, handler)
+  return () => window.removeEventListener(WAKE_EVENT, handler)
 }
