@@ -4218,15 +4218,21 @@ async function insertTickerEvent(r) {
      VALUES ($1, $2, $3, $4)`,
     [String(r.ticker).toUpperCase(), r.event, r.source ?? null, r.user_id ?? null]
   );
-  await pool.query(
-    `DELETE FROM ticker_events
-     WHERE id < (
-       SELECT MIN(id) FROM (
-         SELECT id FROM ticker_events ORDER BY id DESC LIMIT $1
-       ) keep
-     )`,
-    [TICKER_EVENTS_KEEP]
-  );
+  // The keep-newest-50k prune walks up to 50k index entries. It ran after
+  // EVERY insert (tens of millions of index reads a day for a log nobody
+  // needs trimmed per row); nightly retention-cleanup.js already keeps 14 days.
+  // Now about one insert in 200 does it, fire-and-forget (2026-10-09 audit).
+  if (Math.random() < 5e-3) {
+    pool.query(
+      `DELETE FROM ticker_events
+       WHERE id < (
+         SELECT MIN(id) FROM (
+           SELECT id FROM ticker_events ORDER BY id DESC LIMIT $1
+         ) keep
+       )`,
+      [TICKER_EVENTS_KEEP]
+    ).catch(() => {});
+  }
 }
 async function getTickerEventCounts(sinceDays, source) {
   const pool = await getDb();

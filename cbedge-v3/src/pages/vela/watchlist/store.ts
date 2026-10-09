@@ -607,13 +607,43 @@ export const quoteOf = (sym: string): Quote | undefined => {
 const quoteSym = (sym: string) => (sym === 'ES' || sym === 'NQ' ? `/${sym}` : sym)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
+// ── One quote read per symbol per QUOTE_MIN_MS, however many panels ask ─────
+// (2026-10-09 audit.) Six independent 15 s timers call this — the watchlist
+// panel, the symbol picker and its view, the Volt Watch tape, the advanced
+// watchlist, the phone chrome — each with its own overlapping symbol list and
+// no dedupe, so one tab asked for the same ticker several times every 15 s.
+// Now a symbol read in the last QUOTE_MIN_MS is skipped (its value is already
+// in `quotes`), and a call that lands while a read is in flight waits for it
+// first, so the panels share reads instead of racing each other. A ticker
+// that has never been read is always asked for immediately.
+const QUOTE_MIN_MS = 12_000
+const quoteAt = new Map<string, number>()
+let quoteInflight: Promise<void> | null = null
+
 /** Last / change / change % for these tickers (one request), merged into the cache. */
 export async function refreshQuotes(symbols: readonly string[]): Promise<void> {
   if (!symbols.length) return
-  const ask = symbols.slice(0, MAX_SYMBOLS)
+  if (quoteInflight) await quoteInflight.catch(() => {})
+  const now = Date.now()
+  const ask = [...new Set(symbols)].filter((s) => now - (quoteAt.get(s) ?? 0) >= QUOTE_MIN_MS).slice(0, MAX_SYMBOLS)
+  if (!ask.length) return
+  for (const s of ask) quoteAt.set(s, now)
+  const run = readQuotes(ask)
+  quoteInflight = run
+  try {
+    await run
+  } finally {
+    if (quoteInflight === run) quoteInflight = null
+  }
+}
+
+async function readQuotes(ask: string[]): Promise<void> {
   try {
     const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(ask.map(quoteSym).join(','))}`, { cache: 'no-store', credentials: 'same-origin' })
-    if (!r.ok) return
+    if (!r.ok) {
+      for (const s of ask) quoteAt.delete(s)
+      return
+    }
     const j = (await r.json()) as { data?: { items?: Record<string, unknown>[] } }
     for (const it of j.data?.items ?? []) {
       const s = String(it.symbol ?? '').replace(/^\//, '')
@@ -628,7 +658,8 @@ export async function refreshQuotes(symbols: readonly string[]): Promise<void> {
       })
     }
   } catch {
-    /* keep what is showing */
+    // keep what is showing, and let the next call try these again
+    for (const s of ask) quoteAt.delete(s)
   }
   for (const fn of listeners) fn()
 }

@@ -6209,7 +6209,9 @@ if (libDb) {
         try {
           const body = await readJson(req);
           const source = body.source == null ? null : String(body.source);
-          const raw = Array.isArray(body.events) ? body.events : [{ ticker: body.ticker, event: body.event }];
+          // Capped (2026-10-09): an uncapped array ran N inserts in parallel and
+          // could occupy every connection in the shared pool with one POST.
+          const raw = (Array.isArray(body.events) ? body.events : [{ ticker: body.ticker, event: body.event }]).slice(0, 50);
           const VALID = new Set(['click', 'render']);
           const seen = new Set(), events = [];
           for (const e of raw) {

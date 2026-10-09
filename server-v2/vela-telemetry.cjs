@@ -157,12 +157,189 @@ function registerVelaTelemetryRoutes({ register, send, readJson, libDb, clientIp
     return schema;
   }
 
-  async function nowInEt() {
-    const r = await q(`SELECT (NOW() AT TIME ZONE 'America/New_York')::date::text AS day,
-                              EXTRACT(DOW FROM NOW() AT TIME ZONE 'America/New_York')::int AS dow,
-                              EXTRACT(HOUR FROM NOW() AT TIME ZONE 'America/New_York')::int AS hour`);
-    return r[0];
+  // ET calendar day / weekday / hour, in JS. Used to be a DB round trip per beat.
+  const ET_FMT = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    weekday: 'short', hour: '2-digit', hourCycle: 'h23',
+  });
+  const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  function nowInEt() {
+    const parts = Object.fromEntries(ET_FMT.formatToParts(new Date()).map((x) => [x.type, x.value]));
+    return { day: `${parts.year}-${parts.month}-${parts.day}`, dow: DOW[parts.weekday] ?? 0, hour: Number(parts.hour) % 24 };
   }
+
+  // ── The write buffer (2026-10-09 audit) ─────────────────────────────────────
+  // Every open Vela tab beats every 30s (plus 3s after a change, plus a beacon
+  // on hide). Each beat used to run up to 5 sequential queries on the shared
+  // 10-connection pool — a SELECT, an INSERT or a non-HOT UPDATE that rewrote
+  // the JSONB snapshot, an events INSERT, a SELECT just to read the ET date,
+  // and a usage upsert — and the response waited on all of them. At 300 users
+  // that is a steady ~50 statements a second competing with chart reads.
+  //
+  // Now a beat only updates memory and answers at once. Every FLUSH_MS the
+  // buffer is written in at most four multi-row statements: new sessions, one
+  // aggregated UPDATE for every session that beat, the events, and the summed
+  // usage. The owner's live view reads last_seen_at within LIVE_SEC (75s), so
+  // a 10s delay does not show. A crash loses at most one window of telemetry.
+  const FLUSH_MS = 10_000;
+  const MAX_PENDING_SESSIONS = 5_000; // memory bound under a flood of fake sids
+  const MAX_PENDING_EVENTS = 20_000;
+  const CHUNK = 400;
+  const knownSids = new Set();       // sessions this process has already inserted
+  let newSessions = new Map();       // sid → insert row
+  let sessionAgg = new Map();        // sid → aggregated beat
+  let eventRows = [];                // [tsMs, sid, userId, name, propsJson]
+  let usageAgg = new Map();          // `${day}\u0001${userKey}\u0001${kind}\u0001${key}` → sec
+  let flushing = false;
+  const stats = { beats: 0, dropped: 0, flushes: 0, failures: 0, lastError: null };
+
+  function bufferBeat(req, body, userId) {
+    const sid = s(body?.sid, 64);
+    const snap = cleanSnapshot(body?.snapshot);
+    const visibleSec = Math.round(num(body?.visibleMs, 0, MAX_BEAT_SEC * 1000) / 1000);
+    const engagedSec = Math.min(visibleSec, Math.round(num(body?.engagedMs, 0, MAX_BEAT_SEC * 1000) / 1000));
+    const end = !!body?.end;
+
+    if (!sessionAgg.has(sid) && sessionAgg.size >= MAX_PENDING_SESSIONS) { stats.dropped += 1; return; }
+    stats.beats += 1;
+
+    // who / where, worked out once per tab per process
+    if (!knownSids.has(sid) && !newSessions.has(sid)) {
+      let geo = {};
+      let attr = {};
+      try { geo = clientGeo ? clientGeo(req) || {} : {}; } catch { geo = {}; }
+      try { attr = visitAttribution ? visitAttribution(req, {}) || {} : {}; } catch { attr = {}; }
+      newSessions.set(sid, [
+        sid, userId, s(body?.host, 80), s(body?.path, 120), snap?.phone ? 'phone' : (attr.device_type || 'desktop'),
+        s(attr.browser, 40), s(attr.os, 40), s(req.headers['user-agent'], 300),
+        (() => { try { return clientIp ? clientIp(req) : null; } catch { return null; } })(),
+        s(geo.country, 8), s(geo.region, 60), s(geo.city, 80),
+        s(body?.tz, 60), s(body?.lang, 20), s(body?.screen, 30),
+      ]);
+    }
+
+    const agg = sessionAgg.get(sid) || { userId: null, end: false, vis: 0, eng: 0, beats: 0, visible: false, snap: null };
+    agg.userId = userId || agg.userId;
+    agg.end = end;
+    agg.vis += visibleSec;
+    agg.eng += engagedSec;
+    agg.beats += 1;
+    agg.visible = !!body?.visible;
+    if (snap) agg.snap = JSON.stringify(snap);
+    sessionAgg.set(sid, agg);
+
+    // the actions since the last beat
+    const events = (Array.isArray(body?.events) ? body.events : []).slice(-MAX_EVENTS);
+    const nowMs = Date.now();
+    for (const e of events) {
+      if (eventRows.length >= MAX_PENDING_EVENTS) { stats.dropped += 1; break; }
+      const name = s(e?.name, 40);
+      if (!name) continue;
+      // the client's clock, kept within reason of ours
+      const ts = num(e?.ts, nowMs - 15 * 60_000, nowMs + 60_000, nowMs);
+      let props = null;
+      if (e?.props && typeof e.props === 'object') {
+        const o = {};
+        for (const [k, v] of Object.entries(e.props).slice(0, 16)) {
+          o[String(k).slice(0, 24)] = typeof v === 'number' || typeof v === 'boolean' || v == null ? v : String(v).slice(0, 200);
+        }
+        props = JSON.stringify(o);
+      }
+      eventRows.push([ts, sid, userId, name, props]);
+    }
+
+    // time on tickers / timeframes / indicators …
+    if (visibleSec > 0) {
+      const et = nowInEt();
+      const userKey = userId || `sid:${sid}`;
+      for (const [kind, key, sec] of usageRows(snap, visibleSec, et)) {
+        const k = `${et.day}\u0001${userKey}\u0001${kind}\u0001${key}`;
+        usageAgg.set(k, (usageAgg.get(k) || 0) + sec);
+      }
+    }
+  }
+
+  async function flush() {
+    if (flushing) return;
+    if (!newSessions.size && !sessionAgg.size && !eventRows.length && !usageAgg.size) return;
+    flushing = true;
+    // Swap the buffers first: beats that land during the writes go to the next window.
+    const ins = newSessions; newSessions = new Map();
+    const upd = sessionAgg; sessionAgg = new Map();
+    const evs = eventRows; eventRows = [];
+    const use = usageAgg; usageAgg = new Map();
+    try {
+      await ensureSchema();
+      const insRows = [...ins.values()];
+      for (let i = 0; i < insRows.length; i += CHUNK) {
+        const part = insRows.slice(i, i + CHUNK);
+        await q(
+          `INSERT INTO vela_sessions (sid, user_id, host, path, device, browser, os, ua, ip, country, region, city, tz, lang, screen)
+           VALUES ${part.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}
+           ON CONFLICT (sid) DO NOTHING`,
+          part.flat(),
+        );
+      }
+      for (const sid of ins.keys()) knownSids.add(sid);
+      if (knownSids.size > 50_000) knownSids.clear(); // re-inserting is a no-op; this only bounds memory
+
+      const updRows = [...upd.entries()];
+      for (let i = 0; i < updRows.length; i += CHUNK) {
+        const part = updRows.slice(i, i + CHUNK);
+        await q(
+          `UPDATE vela_sessions AS t SET
+             user_id = COALESCE(v.user_id, t.user_id),
+             last_seen_at = NOW(),
+             ended_at = CASE WHEN v.ended THEN NOW() ELSE NULL END,
+             visible_sec = t.visible_sec + v.vis,
+             engaged_sec = t.engaged_sec + v.eng,
+             beats = t.beats + v.beats,
+             visible = v.visible,
+             snapshot = COALESCE(v.snap, t.snapshot)
+           FROM (VALUES ${part.map(() => '(?::text, ?::text, ?::boolean, ?::int, ?::int, ?::int, ?::boolean, ?::jsonb)').join(', ')})
+             AS v(sid, user_id, ended, vis, eng, beats, visible, snap)
+           WHERE t.sid = v.sid`,
+          part.flatMap(([sid, a]) => [sid, a.userId, a.end, a.vis, a.eng, a.beats, a.visible, a.snap]),
+        );
+      }
+
+      for (let i = 0; i < evs.length; i += CHUNK) {
+        const part = evs.slice(i, i + CHUNK);
+        await q(
+          `INSERT INTO vela_events (ts, sid, user_id, name, props)
+           VALUES ${part.map(() => '(to_timestamp(?::double precision / 1000.0), ?, ?, ?, ?::jsonb)').join(', ')}`,
+          part.flat(),
+        );
+      }
+
+      const useRows = [...use.entries()].map(([k, sec]) => [...k.split('\u0001'), sec]);
+      for (let i = 0; i < useRows.length; i += CHUNK) {
+        const part = useRows.slice(i, i + CHUNK);
+        await q(
+          `INSERT INTO vela_usage (day, user_key, kind, key, sec)
+           VALUES ${part.map(() => '(?::date, ?, ?, ?, ?)').join(', ')}
+           ON CONFLICT (day, user_key, kind, key) DO UPDATE SET sec = vela_usage.sec + EXCLUDED.sec`,
+          part.flat(),
+        );
+      }
+
+      // keep the event log bounded (moved off the request path)
+      if (Math.random() < 0.01) {
+        q(`DELETE FROM vela_events WHERE ts < NOW() - make_interval(days => ?)`, [EVENT_KEEP_DAYS]).catch(() => {});
+      }
+      stats.flushes += 1;
+    } catch (err) {
+      // Telemetry is not worth retrying into a struggling database; this
+      // window is dropped and the next one starts clean.
+      stats.failures += 1;
+      stats.lastError = String(err?.message || err).slice(0, 160);
+      console.warn('[vela-telemetry] flush failed (window dropped):', stats.lastError);
+    } finally {
+      flushing = false;
+    }
+  }
+  const flushTimer = setInterval(() => { flush().catch(() => {}); }, FLUSH_MS);
+  if (flushTimer.unref) flushTimer.unref();
 
   // ═══════════════════════════════════════════════════════════════════════════
   // POST /api/vela/telemetry
@@ -174,102 +351,16 @@ function registerVelaTelemetryRoutes({ register, send, readJson, libDb, clientIp
         const body = await readJson(req, 256 * 1024);
         const sid = s(body?.sid, 64);
         if (!sid || !/^[A-Za-z0-9-]{8,64}$/.test(sid)) return send(res, 400, { error: 'bad sid' });
-        await ensureSchema();
         const userId = access?.userId ? String(access.userId) : null;
-        const snap = cleanSnapshot(body?.snapshot);
-        const visibleSec = Math.round(num(body?.visibleMs, 0, MAX_BEAT_SEC * 1000) / 1000);
-        const engagedSec = Math.min(visibleSec, Math.round(num(body?.engagedMs, 0, MAX_BEAT_SEC * 1000) / 1000));
-        const end = !!body?.end;
-
-        // who / where, worked out once per tab (the first beat, or a row that is missing)
-        const have = await q('SELECT sid FROM vela_sessions WHERE sid = ?', [sid]);
-        if (!have.length) {
-          let geo = {};
-          let attr = {};
-          try { geo = clientGeo ? clientGeo(req) || {} : {}; } catch { geo = {}; }
-          try { attr = visitAttribution ? visitAttribution(req, {}) || {} : {}; } catch { attr = {}; }
-          await q(
-            `INSERT INTO vela_sessions (sid, user_id, host, path, device, browser, os, ua, ip, country, region, city, tz, lang, screen)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (sid) DO NOTHING`,
-            [
-              sid, userId, s(body?.host, 80), s(body?.path, 120), snap?.phone ? 'phone' : (attr.device_type || 'desktop'),
-              s(attr.browser, 40), s(attr.os, 40), s(req.headers['user-agent'], 300),
-              (() => { try { return clientIp ? clientIp(req) : null; } catch { return null; } })(),
-              s(geo.country, 8), s(geo.region, 60), s(geo.city, 80),
-              s(body?.tz, 60), s(body?.lang, 20), s(body?.screen, 30),
-            ],
-          );
-        }
-        await q(
-          `UPDATE vela_sessions SET
-             user_id = COALESCE(?, user_id),
-             last_seen_at = NOW(),
-             ended_at = CASE WHEN ? THEN NOW() ELSE NULL END,
-             visible_sec = visible_sec + ?,
-             engaged_sec = engaged_sec + ?,
-             beats = beats + 1,
-             visible = ?,
-             snapshot = COALESCE(?::jsonb, snapshot)
-           WHERE sid = ?`,
-          [userId, end, visibleSec, engagedSec, !!body?.visible, snap ? JSON.stringify(snap) : null, sid],
-        );
-
-        // the actions since the last beat
-        const events = (Array.isArray(body?.events) ? body.events : []).slice(-MAX_EVENTS);
-        if (events.length) {
-          const vals = [];
-          const params = [];
-          const nowMs = Date.now();
-          for (const e of events) {
-            const name = s(e?.name, 40);
-            if (!name) continue;
-            // the client's clock, kept within reason of ours
-            const ts = num(e?.ts, nowMs - 15 * 60_000, nowMs + 60_000, nowMs);
-            let props = null;
-            if (e?.props && typeof e.props === 'object') {
-              const o = {};
-              for (const [k, v] of Object.entries(e.props).slice(0, 16)) {
-                o[String(k).slice(0, 24)] = typeof v === 'number' || typeof v === 'boolean' || v == null ? v : String(v).slice(0, 200);
-              }
-              props = JSON.stringify(o);
-            }
-            vals.push('(to_timestamp(?::double precision / 1000.0), ?, ?, ?, ?::jsonb)');
-            params.push(ts, sid, userId, name, props);
-          }
-          if (vals.length) await q(`INSERT INTO vela_events (ts, sid, user_id, name, props) VALUES ${vals.join(', ')}`, params);
-        }
-
-        // time on tickers / timeframes / indicators …
-        if (visibleSec > 0) {
-          const et = await nowInEt();
-          const rows = usageRows(snap, visibleSec, et);
-          if (rows.length) {
-            const userKey = userId || `sid:${sid}`;
-            const vals = [];
-            const params = [];
-            for (const [kind, key, sec] of rows) {
-              vals.push('(?::date, ?, ?, ?, ?)');
-              params.push(et.day, userKey, kind, key, sec);
-            }
-            await q(
-              `INSERT INTO vela_usage (day, user_key, kind, key, sec) VALUES ${vals.join(', ')}
-               ON CONFLICT (day, user_key, kind, key) DO UPDATE SET sec = vela_usage.sec + EXCLUDED.sec`,
-              params,
-            );
-          }
-        }
-
-        // keep the event log bounded (about one beat in 500 does the sweep)
-        if (Math.random() < 0.002) {
-          q(`DELETE FROM vela_events WHERE ts < NOW() - make_interval(days => ?)`, [EVENT_KEEP_DAYS]).catch(() => {});
-        }
+        bufferBeat(req, body, userId);
         return send(res, 200, { ok: true });
       } catch (err) {
         return send(res, 500, { error: 'telemetry failed', detail: String(err?.message || err) });
       }
     },
   });
+  registerVelaTelemetryRoutes._stats = () => ({ ...stats, pendingSessions: sessionAgg.size, pendingEvents: eventRows.length, pendingUsage: usageAgg.size });
+  registerVelaTelemetryRoutes._flush = flush;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Owner reads
