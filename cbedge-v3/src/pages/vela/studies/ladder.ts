@@ -35,6 +35,16 @@
 // expiries the server lists for those dates (`recordedExpiries`). Friday after
 // the close is Monday's gamma, not Friday's. Nothing recorded for it yet: the
 // session that just closed, as before.
+//
+// BEFORE THE OPEN (the GEX Rail, live: loadRailLadder, 2026-10-09). The recorder
+// writes SPX / NDX around the clock, but single stocks and ETFs (AAPL, NVDA…)
+// only from the 09:30 cash open. So an AAPL chart showing today's pre-market bars
+// asked for today's ladder, got nothing, and said "No ladder recorded" until
+// 09:30 — on every GEX basis, since the switch only picks which number of a cell
+// to read. Now, live, an empty session falls back to the newest earlier session
+// that has columns (its closing book), and the rail names that day. Today's
+// empty read is never cached (dayRead), so the open's first column takes over
+// within a minute.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { forgetQueries, query } from '@/data/api'
@@ -66,6 +76,11 @@ export interface Ladder {
   next?: { expiry: string; after: string }
   /** loadChainLadder: every listed expiry summed (how many), not the nearest one. */
   allExpiries?: number
+  /**
+   * loadRailLadder, live: the asked-for session had nothing recorded yet, so these
+   * columns are this earlier session's (ET date) — see BEFORE THE OPEN above.
+   */
+  prior?: string
 }
 
 /** The cash symbol whose ladder a chart draws. */
@@ -176,7 +191,10 @@ function datesThrough(from: string, to: string): string[] {
  */
 export async function loadRailLadder(c: StudyCtx, date: string | undefined, fresh: boolean): Promise<Ladder> {
   const base = await loadLadder(c, date ? [date] : [], fresh)
-  if (!date || Number.isFinite(c.until) || !pastClose(date)) return base
+  if (!date || Number.isFinite(c.until)) return base
+  // nothing recorded for this session yet (a stock before 09:30): the last one that was
+  if (!base.columns.length) return priorSession(base, date, fresh)
+  if (!pastClose(date)) return base
   const gexSymbol = symbolDef(base.label).gexSymbol
   // an ES / NQ chart on a Sunday evening: its newest bars are Sunday's, but the
   // session that closed is Friday's (its post-close columns are the next expiry's)
@@ -190,6 +208,23 @@ export async function loadRailLadder(c: StudyCtx, date: string | undefined, fres
   for (let k = days.length - 1; k >= 0; k--) {
     const cols = (await dayRead(gexSymbol, days[k]!, next, false, fresh)).columns
     if (cols.length) return { ...base, columns: cols, missing: [], next: { expiry: next, after: days[0]! } }
+  }
+  return base
+}
+
+/**
+ * BEFORE THE OPEN (see above): the newest weekday before `date`, within a week,
+ * that has columns, under its own expiry. `base` unchanged when none does.
+ */
+async function priorSession(base: Ladder, date: string, fresh: boolean): Promise<Ladder> {
+  const gexSymbol = symbolDef(base.label).gexSymbol
+  let t = Date.parse(`${date}T12:00:00Z`)
+  for (let i = 0; i < 7; i++) {
+    t -= 86_400_000
+    if ([0, 6].includes(new Date(t).getUTCDay())) continue
+    const d = new Date(t).toISOString().slice(0, 10)
+    const cols = await dayColumns(gexSymbol, d, fresh)
+    if (cols.length) return { ...base, columns: cols, missing: [], prior: d }
   }
   return base
 }

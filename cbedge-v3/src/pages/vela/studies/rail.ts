@@ -280,12 +280,16 @@ export const railImpl = studyImpl<RailS, Ladder>({
     const basisName = s.metric === 'vol' ? 'volume' : s.metric === 'oi' ? 'open interest' : 'OI + volume'
     // short enough for the 96px rail: SPX GEX 15:59, or after a close SPX MON 16:42
     // MRNA ALL 10:29 when every expiry is summed
-    const head = `${lad.label} ${lad.allExpiries ? 'ALL' : next ? DOW.format(dayDate(next.expiry)).toUpperCase() : 'GEX'} ${at}`
+    // before a stock's 09:30 open: the last recorded session's book, named by its day (AAPL THU 16:00)
+    const prior = lad.prior
+    const head = `${lad.label} ${lad.allExpiries ? 'ALL' : next ? DOW.format(dayDate(next.expiry)).toUpperCase() : prior ? DOW.format(dayDate(prior)).toUpperCase() : 'GEX'} ${at}`
     const headTitle = lad.allExpiries
       ? `${lad.label} gamma, all ${lad.allExpiries} listed expiries summed per strike (live chain, ${at} ET)`
       : next
         ? `Next session: the ${DAY_LONG.format(dayDate(next.expiry))} expiry's gamma, recorded after the ${DAY_LONG.format(dayDate(next.after))} close (column ${at} ET)`
-        : `${lad.label} gamma, nearest expiry, column ${at} ET`
+        : prior
+          ? `Nothing recorded yet today: ${lad.label}'s last recorded book, ${DAY_LONG.format(dayDate(prior))} (column ${at} ET). Today's ladder takes over from the open.`
+          : `${lad.label} gamma, nearest expiry, column ${at} ET`
     return {
       width: s.width,
       side: s.side,
