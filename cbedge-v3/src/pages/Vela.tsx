@@ -29,7 +29,7 @@ import { ALERT_BELL_ID, bindAlertBell, registerAlertBell } from '@/pages/vela/al
 import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
-import { JOURNAL_ACTION_ID, registerJournalLink } from '@/pages/vela/journalLink'
+import { bindJournalLink, JOURNAL_ACTION_ID, registerJournalLink } from '@/pages/vela/journalLink'
 import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
 import { GEX_BASIS_ACTION_ID, bindGexBasis, registerGexBasis } from '@/pages/vela/gexBasisMenu'
 import { patchVwapSession } from '@/pages/vela/vwapSession'
@@ -553,6 +553,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
     const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
+    // Journal shows for the owner only: asks /api/tradejournal/verify once (vela/journalLink.ts)
+    const unbindJournal = onPhone ? () => {} : bindJournalLink(ws)
     // the GEX button names the book every indicator is on (vela/gexBasisMenu.ts)
     const unbindGex = onPhone ? () => {} : bindGexBasis(ws)
     // The legend card on every chart (vela/legend/legendCard.ts), in place of Vela's
@@ -645,6 +647,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindRefresh()
       unbindPicker()
       unbindWorkspace()
+      unbindJournal()
       unbindGex()
       legendGone = true
       unbindLegend()
