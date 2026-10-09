@@ -109,6 +109,13 @@ function getAuthPool() {
       ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? undefined : { rejectUnauthorized: false },
       max: AUTH_POOL_MAX,
       keepAlive: true,
+      // 2026-10-09 audit: this pool answers every session check (the site's
+      // gate, Vela's nginx auth_request, socket revalidation) and had NO
+      // timeouts — one stuck query held a connection indefinitely and a full
+      // pool queued every sign-in check forever. Session lookups are single
+      // indexed reads; 5s is generous.
+      statement_timeout: 5_000,
+      connectionTimeoutMillis: 10_000,
     });
     _authPool.on('error', (e) => {
       console.warn('[ws-auth] pool error (will reconnect):', e.message);

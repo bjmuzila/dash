@@ -368,11 +368,58 @@ const CB_BASES = [
 ];
 type CbBasis = (typeof CB_BASES)[number]["key"];
 
+/** Checkpoint tabs. Keys match server-v2 CHECKPOINTS. */
+const CB_SLOTS = [
+  { key: "all" as const, label: "All" },
+  { key: "0945" as const, label: "9:45" },
+  { key: "1030" as const, label: "10:30" },
+  { key: "1200" as const, label: "12:00" },
+];
+type CbSlot = (typeof CB_SLOTS)[number]["key"];
+
+/** Monday of the current ET week as YYYY-MM-DD (the format cb_trades.date uses). */
+function etWeekStart(): string {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const [y, m, d] = today.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const back = (dt.getUTCDay() + 6) % 7;   // Mon=0 … Sun=6
+  dt.setUTCDate(dt.getUTCDate() - back);
+  return dt.toISOString().slice(0, 10);
+}
+
+/** Client-side port of server-v2 cb-contract-track.js summarize(), for windows the server can't express (this week). */
+function summarizeCb(trades: CbTrade[]): CbSummary[] {
+  return CB_SLOTS.filter((s) => s.key !== "all").map((cp) => {
+    const rows = trades.filter((t) => t.checkpoint === cp.key);
+    const taken = rows.filter((t) => t.status !== "skipped");
+    const withPnl = taken.filter((t) => n(t.pnl) != null);
+    const wins = withPnl.filter((t) => (n(t.pnl) ?? 0) > 0).length;
+    const totalPnl = withPnl.reduce((a, t) => a + (n(t.pnl) ?? 0), 0);
+    const gains = taken
+      .map((t) => (n(t.best_price) != null && n(t.entry_price) != null ? n(t.best_price)! - n(t.entry_price)! : null))
+      .filter((v): v is number => v != null);
+    return {
+      key: cp.key, label: cp.label, probes: rows.length, trades: taken.length,
+      openNow: taken.filter((t) => t.status === "open").length,
+      peakedUp: gains.filter((g) => g > 0).length,
+      avgPeakGain: gains.length ? Math.round((gains.reduce((a, v) => a + v, 0) / gains.length) * 100) / 100 : null,
+      wins,
+      winRate: withPnl.length ? wins / withPnl.length : null,
+      avgPnl: withPnl.length ? Math.round((totalPnl / withPnl.length) * 100) / 100 : null,
+      totalPnl: withPnl.length ? Math.round(totalPnl * 100) / 100 : null,
+      totalPnlUsd: withPnl.length ? Math.round(withPnl.reduce((a, t) => a + (n(t.pnl_usd) ?? 0), 0) * 100) / 100 : null,
+      takeRate: rows.length ? taken.length / rows.length : null,
+    };
+  });
+}
+
 function TradesView() {
   const [trades, setTrades] = useState<CbTrade[]>([]);
   const [summary, setSummary] = useState<CbSummary[]>([]);
   const [config, setConfig] = useState<CbConfig | null>(null);
-  const [range, setRange] = useState<"7d" | "20d" | "all">("20d");
+  const [range, setRange] = useState<"week" | "7d" | "20d" | "all">("20d");
+  // Which checkpoint the cards, table and totals report. Pure client filter — no refetch.
+  const [slot, setSlot] = useState<CbSlot>("all");
   // The whole tab reads one basis at a time — see the note above the type.
   const [basis, setBasis] = useState<CbBasis>("oivol");
   const [showSkipped, setShowSkipped] = useState(true);
@@ -383,7 +430,9 @@ function TradesView() {
   const [status, setStatus] = useState<{ text: string; bad: boolean } | null>(null);
   const [diag, setDiag] = useState<unknown>(null);
 
-  const qs = (range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20") + `&basis=${basis}`;
+  // "This week" fetches the last 7 recorded sessions (always covers Mon→today)
+  // and trims to the current ET week below; `since` counts sessions, not days.
+  const qs = (range === "all" ? "?all=1" : range === "7d" || range === "week" ? "?since=7" : "?since=20") + `&basis=${basis}`;
 
   const load = useCallback(async () => {
     setErr(null);
@@ -445,33 +494,57 @@ function TradesView() {
   const buyMin = config?.BUY_MIN ?? 1.0;
   const mult = config?.MULTIPLIER ?? 100;
 
+  // Week window first (it changes the summary), then the checkpoint tab.
+  const inRange = useMemo(() => {
+    if (range !== "week") return trades;
+    const from = etWeekStart();
+    return trades.filter((t) => String(t.date).slice(0, 10) >= from);
+  }, [trades, range]);
+  const scoped = useMemo(
+    () => (slot === "all" ? inRange : inRange.filter((t) => t.checkpoint === slot)),
+    [inRange, slot],
+  );
+  const shownSummary = useMemo(() => {
+    const base = range === "week" ? summarizeCb(inRange) : summary;
+    return slot === "all" ? base : base.filter((s) => s.key === slot);
+  }, [range, inRange, summary, slot]);
+
   const visible = useMemo(
-    () => (showSkipped ? trades : trades.filter((t) => t.status !== "skipped")),
-    [trades, showSkipped],
+    () => (showSkipped ? scoped : scoped.filter((t) => t.status !== "skipped")),
+    [scoped, showSkipped],
   );
   const totals = useMemo(() => {
     // `status === "closed"`, not `pnl != null`. Held positions now carry a
     // mark-to-market pnl all day, so the old test folded live marks into the
     // booked win rate and the net dollar figure — numbers that are supposed to
     // mean "this is what the day actually paid".
-    const settled = trades.filter((t) => t.status === "closed" && t.pnl != null);
+    const settled = scoped.filter((t) => t.status === "closed" && t.pnl != null);
     const wins = settled.filter((t) => (n(t.pnl) ?? 0) > 0).length;
     return {
-      probes: trades.length,
-      taken: trades.filter((t) => t.status !== "skipped").length,
-      open: trades.filter((t) => t.status === "open").length,
+      probes: scoped.length,
+      taken: scoped.filter((t) => t.status !== "skipped").length,
+      open: scoped.filter((t) => t.status === "open").length,
       closed: settled.length,
       wins,
       winRate: settled.length ? wins / settled.length : null,
       usd: settled.reduce((a, t) => a + (n(t.pnl_usd) ?? 0), 0),
     };
-  }, [trades]);
+  }, [scoped]);
 
   const rangeBtn = (key: typeof range): React.CSSProperties => ({
     fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${range === key ? C.cyan : C.border}`,
     background: range === key ? rgba(C.cyan, 0.18) : "transparent",
     color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+  });
+
+  // Checkpoint tabs wear the page's tab-strip look (cyan, a touch wider) so they
+  // read as tabs, not as one more range button.
+  const slotBtn = (key: CbSlot): React.CSSProperties => ({
+    fontSize: 14, fontWeight: 800, padding: "7px 18px", borderRadius: 8, cursor: "pointer",
+    border: `1px solid ${slot === key ? C.cyan : C.border}`,
+    background: slot === key ? rgba(C.cyan, 0.18) : "transparent",
+    color: slot === key ? C.cyan : C.label, letterSpacing: "0.08em", textTransform: "uppercase", fontFamily: "inherit",
   });
 
   // The basis switch wears PURPLE, not the range buttons' cyan, because it does
@@ -523,10 +596,21 @@ function TradesView() {
           >
             Skipped {showSkipped ? "on" : "off"}
           </button>
+          <button onClick={() => setRange("week")} style={rangeBtn("week")} title="Monday → today (ET)">This week</button>
           <button onClick={() => setRange("7d")} style={rangeBtn("7d")}>7d</button>
           <button onClick={() => setRange("20d")} style={rangeBtn("20d")}>20d</button>
           <button onClick={() => setRange("all")} style={rangeBtn("all")}>All</button>
         </div>
+      </div>
+
+      {/* Checkpoint tabs — narrow the cards, table and totals to one entry time. */}
+      <div className="tab-strip" style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: MUTED, textTransform: "uppercase", letterSpacing: "0.1em", marginRight: 4 }}>Time</span>
+        {CB_SLOTS.map((s) => (
+          <button key={s.key} onClick={() => setSlot(s.key)} style={slotBtn(s.key)}>
+            {s.key === "all" ? "All" : `${s.label} only`}
+          </button>
+        ))}
       </div>
 
       {/* Recorder controls. "Nothing is updating" is the failure this feature is
@@ -543,7 +627,7 @@ function TradesView() {
 
       {/* Per-checkpoint roll-up */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22, flexShrink: 0 }}>
-        {summary.map((s) => {
+        {shownSummary.map((s) => {
           // Bare CARD — see the note on the Confidence cards above.
           const accent = wrColor(s.winRate);
           return (
@@ -610,6 +694,10 @@ function TradesView() {
           checkpoint per basis as each session runs —
           TastyTrade has no per-contract history, so this table fills forward from the day the recorder
           went live and cannot be backfilled. First rows appear at 9:45 ET on the next trading day.
+        </div>
+      ) : scoped.length === 0 ? (
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14, lineHeight: 1.6, flexShrink: 0 }}>
+          No {slot === "all" ? "" : `${CB_SLOTS.find((x) => x.key === slot)?.label} `}checkpoints recorded {range === "week" ? "this week" : "in this range"} yet.
         </div>
       ) : (
         <div style={{ ...CARD, padding: 0, overflow: "hidden", flexShrink: 0 }}>

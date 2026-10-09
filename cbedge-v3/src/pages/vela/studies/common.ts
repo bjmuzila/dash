@@ -49,6 +49,7 @@ import {
   type DrawingLabel,
   type InputSchema,
   type InputValue,
+  type LineStyle,
   type NativeIndicator,
   type NativeIndicatorContext,
   type NativeIndicatorOutput,
@@ -552,7 +553,7 @@ export function seriesOf(
   bars: readonly OHLCV[],
   values: readonly (number | null)[],
   color: string,
-  o: { width?: number; dashed?: boolean; kind?: 'step' | 'line' | 'histogram' | 'area'; axisChip?: boolean; colors?: readonly (string | null)[] } = {},
+  o: { width?: number; dashed?: boolean; lineStyle?: LineStyle; kind?: 'step' | 'line' | 'histogram' | 'area'; axisChip?: boolean; colors?: readonly (string | null)[] } = {},
 ): SeriesSpec {
   const kind = o.kind ?? 'step'
   return {
@@ -566,7 +567,8 @@ export function seriesOf(
       const c = o.colors?.[i]
       return c ? { time: b.time, value, color: c } : { time: b.time, value }
     }),
-    style: { color, width: o.width ?? 1.5, lineStyle: o.dashed ? ('dashed' as const) : ('solid' as const) },
+    // `lineStyle` (solid / dashed / dotted) wins over the older `dashed` flag
+    style: { color, width: o.width ?? 1.5, lineStyle: o.lineStyle ?? (o.dashed ? 'dashed' : 'solid') },
     ...(o.axisChip === false ? { display: hiddenAxis } : {}),
   }
 }

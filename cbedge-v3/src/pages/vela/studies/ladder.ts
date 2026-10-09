@@ -291,8 +291,14 @@ const ALL_TOP = 40
  * same per-strike arithmetic as everywhere (mgMath strikeGex). One column, now.
  * Expiries already past are left out. ES / NQ read SPX / NDX moved by the basis,
  * as loadLadder does.
+ *
+ * WITHIN `rangePct` OF SPOT (2026-10-09, Brandon: "keep it within 10-20% of spot
+ * if it gets all"): summed over every expiry, far-out strikes carrying months of
+ * open interest (LEAPS, deep puts) would otherwise outrank the strikes price is
+ * actually trading around and win the top-40 cut. Strikes outside spot ± rangePct
+ * are left out BEFORE the ranking, so the 40 kept are the biggest near price.
  */
-export async function loadChainLadder(c: StudyCtx, fresh: boolean): Promise<Ladder> {
+export async function loadChainLadder(c: StudyCtx, fresh: boolean, rangePct = 10): Promise<Ladder> {
   const label = ladderKey(c)
   const [json, basis] = await Promise.all([
     query<unknown>(chainAllUrl(label), { staleMs: fresh ? 25_000 : 60_000 }).catch(() => null),
@@ -312,8 +318,10 @@ export async function loadChainLadder(c: StudyCtx, fresh: boolean): Promise<Ladd
   if (!exps.length || !(spot > 0)) return { columns: [], shift, label, missing: [today], allExpiries: 0 }
   const net = new Map<number, number>()
   const vol = new Map<number, number>()
+  const band = (spot * Math.max(1, rangePct)) / 100
   for (const e of exps) {
     for (const [k, row] of e.byStrike) {
+      if (Math.abs(k - spot) > band) continue
       net.set(k, (net.get(k) ?? 0) + strikeGex(row, spot, 'oivol'))
       vol.set(k, (vol.get(k) ?? 0) + strikeGex(row, spot, 'vol'))
     }

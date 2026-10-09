@@ -77,6 +77,12 @@ for (const s of pageSpecs) {
 
 // ---- (2) toolbar nav items must have a matching route ----
 const routePaths = new Set([...appSrc.matchAll(/<Route\s+path=["']([^"']+)["']/g)].map((x) => x[1]));
+// A toolbar item v3 already answers needs no v2 route (2026-10-09): it is a key
+// in PORTED (lib/v3Routes.ts), so middleware.ts sends the document request to
+// /v3 and V3Redirect does the same for an in-app click before any route renders.
+const v3RoutesSrc = (() => { try { return readFileSync(join(ROOT, 'lib', 'v3Routes.ts'), 'utf8'); } catch { return ''; } })();
+const portedBlock = (v3RoutesSrc.match(/export const PORTED[^=]*=\s*\{([\s\S]*?)\n\};/) || [])[1] || '';
+const PORTED_PATHS = new Set([...portedBlock.matchAll(/["'](\/[^"']*)["']\s*:/g)].map((x) => x[1]));
 const toolbarSrc = readFileSync(toolbarPath, 'utf8');
 const navBlock = (toolbarSrc.match(/NAV_ITEMS[^=]*=\s*\[([\s\S]*?)\n\];/) || [])[1] || '';
 const navItems = [];
@@ -88,6 +94,7 @@ for (const { href, block } of navItems) {
   if (/extHref:/.test(block)) continue;
   if (/ownerOnly:\s*true/.test(block)) continue;
   if (NEXT_ONLY.has(href)) continue;
+  if (PORTED_PATHS.has(href)) continue;
   if (DRY) { console.log('  nav ' + href + ' -> ' + (routePaths.has(href) ? 'has route' : 'NO ROUTE')); continue; }
   if (!routePaths.has(href)) errors.push('Toolbar nav item "' + href + '" has no <Route path="' + href + '"> in app-vite/src/App.tsx — it will redirect to /traders-dashboard. Add the route (client-component page) or remove the item.');
 }

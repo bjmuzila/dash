@@ -81,7 +81,6 @@ const GexChangeTopTab = lazy(() => import('@/pages/scanner/GexChangeTopTab'))
 const PickStudyTab = lazy(() => import('@/pages/scanner/PickStudyTab'))
 const StrikeQueryTab = lazy(() => import('@/pages/scanner/StrikeQueryTab'))
 const IbStatsTab = lazy(() => import('@/pages/scanner/IbStatsTab'))
-const WatchThisTab = lazy(() => import('@/pages/scanner/WatchThisTab'))
 const KalmanTab = lazy(() => import('@/pages/scanner/KalmanTab'))
 const AlignTab = lazy(() => import('@/pages/scanner/AlignTab'))
 const AlignMainTab = lazy(() => import('@/pages/scanner/AlignMainTab'))
@@ -92,7 +91,6 @@ const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.
   pickstudy: PickStudyTab,
   strike: StrikeQueryTab,
   ibstats: IbStatsTab,
-  watch: WatchThisTab,
   kalman: KalmanTab,
   align: AlignTab,
   alignmain: AlignMainTab,

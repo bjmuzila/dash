@@ -99,6 +99,9 @@ const ETF_ROW_LIMIT = 8000
 const HISTORY_STALE_MS = 20_000
 /** Hidden longer than this, the live feed re-reads history on return to fill the gap. */
 const CATCH_UP_AFTER_MS = 30_000
+// Reopen backoff for a live stream the browser closed (non-200 on reconnect).
+const REOPEN_MIN_MS = 3_000
+const REOPEN_MAX_MS = 60_000
 /** A live minute older than this cannot START a forming bar (see subscribe). */
 const STALE_LIVE_MS = 30 * MIN_MS
 
@@ -1078,10 +1081,31 @@ export class CbEdgeProvider implements DataProvider {
       }
     }
 
-    const start = () => {
-      if (stopped || es) return
-      es = new EventSource(liveStreamUrl(def))
-      es.onmessage = (ev) => {
+    // A browser closes an EventSource FOR GOOD when a reconnect gets a non-200
+    // answer — the 502 while the dashboard restarts on a deploy, or a 401.
+    // Before 2026-10-09 nothing reopened it, so after any restart every cash
+    // chart sat on the poll (which was itself 501ing) until the tab was hidden
+    // and shown again. Now a CLOSED stream is reopened with backoff, and the
+    // minutes it missed are healed with catchUp() once it is back.
+    let reopenId: ReturnType<typeof setTimeout> | null = null
+    let reopenDelay = REOPEN_MIN_MS
+    let reopened = false
+
+    const openStream = () => {
+      if (stopped || es || document.hidden) return
+      const stream = new EventSource(liveStreamUrl(def))
+      es = stream
+      // onopen = the server answered 200: the restart is over. A quiet symbol
+      // (an index overnight) may not send a data frame for minutes, so the
+      // heal runs here rather than on the first message.
+      stream.onopen = () => {
+        reopenDelay = REOPEN_MIN_MS
+        if (reopened) {
+          reopened = false
+          void catchUp()
+        }
+      }
+      stream.onmessage = (ev) => {
         try {
           lastStreamAt = Date.now()
           for (const m of liveRows(JSON.parse(ev.data as string), def.key)) push(m)
@@ -1089,8 +1113,26 @@ export class CbEdgeProvider implements DataProvider {
           /* a malformed frame is not a reason to tear down a working stream */
         }
       }
-      // No onerror that closes: EventSource reconnects by itself (the route
-      // sends `retry: 3000`), and the poll covers the gap meanwhile.
+      // While readyState is CONNECTING the browser is retrying by itself (the
+      // route sends `retry: 3000`) and the poll covers the gap. Only CLOSED —
+      // the browser has given up — needs us.
+      stream.onerror = () => {
+        if (stopped || es !== stream || stream.readyState !== EventSource.CLOSED) return
+        es = null
+        if (reopenId) clearTimeout(reopenId)
+        reopenId = setTimeout(() => {
+          reopenId = null
+          reopened = true
+          openStream()
+        }, reopenDelay)
+        reopenDelay = Math.min(reopenDelay * 2, REOPEN_MAX_MS)
+      }
+    }
+
+    const start = () => {
+      if (stopped) return
+      openStream()
+      if (pollId) return
       void poll()
       pollId = setInterval(() => void poll(), LIVE_FALLBACK_MS)
     }
@@ -1098,6 +1140,10 @@ export class CbEdgeProvider implements DataProvider {
     const halt = () => {
       es?.close()
       es = null
+      if (reopenId) {
+        clearTimeout(reopenId)
+        reopenId = null
+      }
       if (pollId) {
         clearInterval(pollId)
         pollId = null

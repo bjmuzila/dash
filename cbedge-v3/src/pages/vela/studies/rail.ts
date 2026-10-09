@@ -109,7 +109,7 @@ import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
 import { VT_LADDER_TITLE, vtDef, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
-import { RAIL_EXPIRIES, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
+import { RAIL_EXPIRIES, RAIL_RANGES, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
 import { gexBasis, vtCoilOn } from '@/pages/vela/gexBasis'
 import { cellAlpha, columnStats, fmtGex } from '@/board/multiGreek/mgMath'
 import { columnsUntil, ladderKey, loadChainLadder, loadRailLadder, sessionDates, type Ladder } from './ladder'
@@ -135,6 +135,8 @@ interface RailS {
   profile: boolean
   /** Expiries: every listed expiry summed (live), not the nearest one. */
   all: boolean
+  /** All expirations: strikes within this % of spot (10 / 15 / 20). */
+  range: number
 }
 
 export interface RailRowOut {
@@ -226,12 +228,13 @@ export const railImpl = studyImpl<RailS, Ladder>({
       heat: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[1],
       profile: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[2],
       all: str(i.exp, RAIL_EXPIRIES[0]) === RAIL_EXPIRIES[1],
+      range: Number.parseInt(str(i.range, RAIL_RANGES[0]).replace(/\D/g, ''), 10) || 10,
     }
   },
-  dataKey: (c, s) => `${ladderKey(c)}|${railDay(c).join(',')}|${s.all && c.ctx.live ? 'all' : 'near'}`,
+  dataKey: (c, s) => `${ladderKey(c)}|${railDay(c).join(',')}|${s.all && c.ctx.live ? `all${s.range}` : 'near'}`,
   // All expirations is live only: the per-minute recorder keeps the nearest expiry,
   // so a replay rewinds on that one
-  load: (c, s, fresh) => (s.all && c.ctx.live ? loadChainLadder(c, fresh) : loadRailLadder(c, railDay(c)[0], fresh)),
+  load: (c, s, fresh) => (s.all && c.ctx.live ? loadChainLadder(c, fresh, s.range) : loadRailLadder(c, railDay(c)[0], fresh)),
   refreshMs: 60_000,
   // the replay clock moves the column the rail reads; live, a new minute's column arrives by refresh
   everyTick: true,
@@ -305,7 +308,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
     const prior = lad.prior
     const head = `${lad.label} ${lad.allExpiries ? 'ALL' : next ? DOW.format(dayDate(next.expiry)).toUpperCase() : prior ? DOW.format(dayDate(prior)).toUpperCase() : 'GEX'} ${at}`
     const headTitle = lad.allExpiries
-      ? `${lad.label} gamma, all ${lad.allExpiries} listed expiries summed per strike (live chain, ${at} ET)`
+      ? `${lad.label} gamma, all ${lad.allExpiries} listed expiries summed per strike within ±${s.range}% of spot (live chain, ${at} ET)`
       : next
         ? `Next session: the ${DAY_LONG.format(dayDate(next.expiry))} expiry's gamma, recorded after the ${DAY_LONG.format(dayDate(next.after))} close (column ${at} ET)`
         : prior
@@ -325,7 +328,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
       empty: rows.length ? '' : 'Empty ladder',
-      key: `${col.slotTs}|${next?.expiry ?? ''}|${lad.allExpiries ?? 0}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}|${lv.vt ? `${lv.vt.volt},${lv.vt.reversal},${lv.vt.surge},${lv.vt.coils.join('/')}` : ''}`,
+      key: `${col.slotTs}|${next?.expiry ?? ''}|${lad.allExpiries ?? 0}:${s.range}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}|${lv.vt ? `${lv.vt.volt},${lv.vt.reversal},${lv.vt.surge},${lv.vt.coils.join('/')}` : ''}`,
     }
   },
 })

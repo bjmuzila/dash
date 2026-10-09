@@ -34,4 +34,5 @@ FROM nginx:alpine
 COPY deploy/vela/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/cbedge-v3/dist-vela /usr/share/nginx/html
 COPY deploy/vela/denied.html /usr/share/nginx/html/denied.html
+COPY deploy/vela/holding.html /usr/share/nginx/html/holding.html
 EXPOSE 8091

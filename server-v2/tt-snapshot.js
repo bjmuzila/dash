@@ -256,7 +256,7 @@ async function yahooDaily(symbol, startDate, endDate, interval = '1d') {
     + `?period1=${p1}&period2=${p2}&interval=${iv}`;
   let json;
   try {
-    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } });
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) }); // timeout added 2026-10-09
     if (!r.ok) throw new Error(`yahoo ${r.status}`);
     json = await r.json();
   } catch (err) {

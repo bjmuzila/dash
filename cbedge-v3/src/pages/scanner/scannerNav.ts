@@ -62,6 +62,12 @@
 //   The tab's modules are tombstoned under pages/scanner/ (TpoTab.tsx,
 //   tpoData.ts, tpoStructures.ts, tpoTaxonomy.ts, tpoProfile.ts, amt.ts); the
 //   candle loaders they shared with IB Stats live on in pages/scanner/candles.ts.
+//   'watch' (Watch This) left the same way on 2026-10-09 (Brandon: "I don't use
+//   the watch this page anymore"): its server recorder (far-cb-recorder.js)
+//   swept every watchlist chain over REST all day for this one tab, so the
+//   recorder is off (FAR_CB_ENABLED) and the tab is out of SCANNER_TABS,
+//   SCANNER_GROUPS and the union. WatchThisTab.tsx / watchThis*.ts are left
+//   unreferenced; a pasted ?tab=watch falls back to DEFAULT_TAB.
 //
 // Spec: docs/parity/scanner.md Part A, rows A12–A29.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +81,6 @@ export type ScannerTabId =
   | 'pickstudy'
   | 'strike'
   | 'ibstats'
-  | 'watch'
   | 'kalman'
   | 'align'
   | 'alignmain'
@@ -162,7 +167,6 @@ export const SCANNER_TABS: readonly ScannerTabDef[] = [
   // 2026-10-08: the same board for the MAIN (hot) lane only — indices + mega-caps.
   { id: 'alignmain', label: 'Wall Alignment · Main', short: 'Align Main', accent: V2.cyan, icon: '⭐' },
   { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: V2.accent, icon: '📐' },
-  { id: 'watch', label: 'Watch This', short: 'Watch', accent: V2.accent, icon: '👁️' },
 ]
 
 /**
@@ -185,7 +189,6 @@ export const SCANNER_GROUPS: readonly { key: string; tabs: readonly ScannerTabId
   // folded into 'gamma': IB Stats is a structure read, not a gamma read, and the
   // divider is what says so.
   { key: 'structure', tabs: ['ibstats'] },
-  { key: 'more', tabs: ['watch'] },
 ]
 
 /**

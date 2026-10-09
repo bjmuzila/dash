@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="color-scheme" content="dark">
+<title>Vela</title>
+<!--
+  deploy/vela/holding.html — served by vela-web's nginx (deploy/vela/nginx.conf,
+  location @down) ONLY while the dashboard container behind it cannot answer:
+  a deploy restart, a crash, a stalled event loop. Added 2026-10-09; before it
+  those moments showed nginx's stock "500 Internal Server Error".
+
+  It looks like a slow load on purpose (Vela's ink background, a quiet spinner,
+  no error wording), polls /proxy/health through this same host, and reloads
+  the exact URL the moment the dashboard answers. Self-contained: no fonts,
+  scripts or images from anywhere, because nothing behind nginx is reachable
+  while this is showing.
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0a0d10; color: #e7ece9;
+    font: 14px/1.5 "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; padding: 0 16px; text-align: center; }
+  .spin { width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid rgba(47, 107, 255, 0.22); border-top-color: #2f6bff;
+    animation: s 0.8s linear infinite; }
+  .msg { color: #c0c5c3; font-size: 13px; }
+  .slow { color: #c0c5c3; font-size: 12.5px; display: none; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+</style>
+</head>
+<body>
+<div class="wrap" role="status" aria-live="polite">
+  <div class="spin" aria-hidden="true"></div>
+  <div class="msg">Loading Vela&hellip;</div>
+  <div class="slow" id="slow">Taking longer than usual. This page reloads by itself when Vela is back.</div>
+</div>
+<script>
+(function () {
+  var started = Date.now();
+  function tick() {
+    fetch('/proxy/health', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { if (r.ok) { location.reload(); } else { later(); } })
+      .catch(later);
+  }
+  function later() {
+    var waited = Date.now() - started;
+    if (waited > 20000) {
+      var el = document.getElementById('slow');
+      if (el) el.style.display = 'block';
+    }
+    // A deploy restart is ~10-30s. Past 2 minutes keep trying, less often, so
+    // a real outage is not hammered by every open tab.
+    setTimeout(tick, waited > 120000 ? 10000 : 1500);
+  }
+  setTimeout(tick, 1500);
+})();
+</script>
+</body>
+</html>

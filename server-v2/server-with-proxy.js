@@ -376,6 +376,10 @@ const RETIRED_NEXT_PAGES = {
   '/logs': '/home',
 };
 const PORT = parseInt(process.env.PORT || '3001', 10);
+// Recorders whose output nothing reads any more (2026-10-09 audit): forward
+// scanner, ticker-wall, momentum-bias, preview / home / mult-greek snapshots.
+// Off by default; LEGACY_RECORDERS=1 in .env.local starts them again.
+const LEGACY_RECORDERS = process.env.LEGACY_RECORDERS === '1';
 const DEV = process.env.NODE_ENV !== 'production';
 
 // Maintenance mode: when ON, the Next middleware serves /maintenance to every
@@ -1433,7 +1437,13 @@ async function ensureFlowPrintsSchema(pool) {
     // fetch and silently yields an empty tape. Index the exact shape of that
     // query so it becomes an index range scan.
     await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_prem_ts_idx ON flow_prints (date, premium DESC, ts DESC)');
-    await pool.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
+    // REMOVED 2026-10-09: `UPDATE flow_prints SET underlying_norm = upper(underlying)
+    // WHERE underlying_norm IS NULL`. No index can serve that predicate, so it
+    // seq-scanned the whole 7 GB table on the first flow read after every boot,
+    // under this pool's 20s statement_timeout — and on a timeout
+    // _flowSchemaEnsured stayed false, so it ran again on the next flow read.
+    // The writer (state/flow-history-writer.js) fills underlying_norm on every
+    // insert and its own copy of this backfill was removed for the same reason.
     _flowSchemaEnsured = true;
   } catch (e) {
     console.warn('[flow-history-read] schema ensure failed (will retry next request):', e.message);
@@ -5891,7 +5901,30 @@ async function main() {
       }
     }
   }
-  await startFeedWithRetry();
+  // LISTEN FIRST, FEED SECOND (2026-10-09 audit). This used to be
+  // `await startFeedWithRetry()` — and that retries forever — BEFORE
+  // server.listen(). If TastyTrade was down or its OAuth hung during any
+  // restart, nothing listened: cbedge.net, Vela, the owner site and voltick all
+  // stayed down until TastyTrade came back. Now HTTP comes up immediately and
+  // /healthz/ready reports the feed honestly. The background jobs in the listen
+  // callback still wait for the feed (up to FEED_GATE_MS), exactly as before,
+  // so no recorder takes its first pass against a cold feed.
+  //
+  // startFeedOnce() is single-flight: the keep-warm loop below used to start a
+  // NEW endless retry loop every 30s during a long outage, and they piled up.
+  let feedStarting = null;
+  const startFeedOnce = () => {
+    if (!feedStarting) {
+      feedStarting = startFeedWithRetry().finally(() => { feedStarting = null; });
+    }
+    return feedStarting;
+  };
+  const FEED_GATE_MS = Number(process.env.FEED_GATE_MS || 120_000);
+  const feedReady = startFeedOnce().catch((e) => console.error('[SERVER-V2] feed start:', e?.message || e));
+  const feedOrTimeout = Promise.race([
+    feedReady,
+    new Promise((r) => setTimeout(r, FEED_GATE_MS).unref()),
+  ]);
 
   // Keep-warm watchdog: every 30s, if the feed is NOT idle-paused but has gone
   // unhealthy (Theta blip, dropped dxLink, no recent frames), kick it back to
@@ -5932,10 +5965,14 @@ async function main() {
       return;
     }
     if (!feedUnhealthySince) feedUnhealthySince = Date.now();
-    console.warn('[SERVER-V2] keep-warm: feed looks cold (no live spot) — restarting feed');
-    try {
+    if (feedStarting) {
+      // A start (boot or a previous tick) is still retrying — let it finish
+      // rather than stopping it and stacking a second retry loop on top.
+      console.warn('[SERVER-V2] keep-warm: feed still starting — waiting');
+    } else try {
+      console.warn('[SERVER-V2] keep-warm: feed looks cold (no live spot) — restarting feed');
       if (typeof proxy.stop === 'function') { try { await proxy.stop(); } catch {} }
-      await startFeedWithRetry();
+      await startFeedOnce();
     } catch (err) {
       console.error('[SERVER-V2] keep-warm restart failed:', err.message);
     }
@@ -5972,6 +6009,9 @@ async function main() {
 
   server.listen(PORT, () => {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
+    // Everything below starts once the feed is up (or FEED_GATE_MS has passed),
+    // the same order as before the listen-first change above.
+    feedOrTimeout.then(() => {
     // Resolve the editable rosters BEFORE the recorders take their first pass,
     // so the synchronous accessors (multi-flow's constructor, the oi-daily idle
     // check) see baseline+overrides rather than the bare file. Fire-and-forget:
@@ -6061,7 +6101,12 @@ async function main() {
     startGreekScannerRecorder(PORT);
     // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
     // strike (within 30d expirations) sits unusually far OTM vs spot.
-    startFarCbRecorder();
+    // OFF since 2026-10-09: its only reader was the v3 Scanner's Watch This tab,
+    // which is retired, and its all-day REST sweep of every watchlist chain was
+    // one of the heaviest jobs on the live core. FAR_CB_ENABLED=1 turns it back
+    // on. The /proxy/far-cb-* routes stay and serve the last recorded rows.
+    if (process.env.FAR_CB_ENABLED === '1') startFarCbRecorder();
+    else console.log('[far-cb] recorder OFF (Watch This retired) — set FAR_CB_ENABLED=1 to run it');
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip / CB). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();
@@ -6099,7 +6144,7 @@ async function main() {
     // Forward walls: the next unexpired contract, swept pre-open and post-close
     // into its own table so the 0DTE stack's one-expiry-per-session invariant
     // is never violated.
-    startForwardScanner();
+    if (LEGACY_RECORDERS) startForwardScanner(); // no reader: /proxy/walls-forward has no caller
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.
@@ -6125,7 +6170,7 @@ async function main() {
     // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side
     // instead of depending on a browser tab staying open. NDX runs 24/7;
     // SPY/QQQ only tick during RTH. Feeds /proxy/wall-history.
-    startTickerWallRecorder();
+    if (LEGACY_RECORDERS) startTickerWallRecorder(); // no reader: ChainStatsBar is imported nowhere
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
     startGreeksTsWriter(PORT);
@@ -6168,7 +6213,7 @@ async function main() {
     // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
     // by the feed in _flushEsCandles) via follow-through every 5m → the
     // momentum_bias_signals table. Read via /api/momentum-bias.
-    require('./momentum-bias-tracker').startMomentumBiasGrader();
+    if (LEGACY_RECORDERS) require('./momentum-bias-tracker').startMomentumBiasGrader(); // no reader
     // GEX/CB actionable signal engine for the ES Candles page: every few seconds
     // during the futures session it turns the live heatmap levels (flip cross,
     // Call/Put wall reject+break, CB reaction, level confluence) into long/short
@@ -6191,16 +6236,16 @@ async function main() {
     // Delayed preview feed for signed-up-but-unpaid users (/preview page):
     // every 30m during RTH, snapshots spot + call/put wall + gamma flip from
     // the same /api/gex the paid dashboard reads → preview_snapshots.
-    require('./preview-snapshot-recorder').startPreviewSnapshotRecorder(PORT);
+    if (LEGACY_RECORDERS) require('./preview-snapshot-recorder').startPreviewSnapshotRecorder(PORT); // its POST target /api/preview does not exist
     // Delayed FULL-chain feed for /home in "delayed" mode (unpaid signed-in
     // users): every 30m during RTH, snapshots the entire hot /proxy/gex
     // payload → home_static_snapshots, so unpaid /home renders the same chart
     // component as paid users, just frozen.
-    require('./home-snapshot-recorder').startHomeSnapshotRecorder(PORT);
+    if (LEGACY_RECORDERS) require('./home-snapshot-recorder').startHomeSnapshotRecorder(PORT); // /home and /app/home redirect into v3
     // Delayed feed for /mult-greek in "delayed" mode (unpaid signed-in users):
     // every 30m during RTH, snapshots the SPX/SPY/QQQ chain at one shared
     // near-dated expiry → mult_greek_static_snapshots.
-    require('./mult-greek-snapshot-recorder').startMultGreekSnapshotRecorder(PORT);
+    if (LEGACY_RECORDERS) require('./mult-greek-snapshot-recorder').startMultGreekSnapshotRecorder(PORT); // /mult-greek retired 2026-09-14
     // Per-strike NET GEX history (SPX/SPY/QQQ/IWM, 4 closest expiries) every 60s
     // during RTH → mult_greek_gex_ring/open, backing the /mult-greek click card's
     // 15m/30m/open change. Guarded — never crash startup if it fails to load.
@@ -6274,6 +6319,7 @@ async function main() {
     // morning positioning/levels/calendar snapshot into a full daily SPX/ES
     // strategy → daily_strategy.
     require('./strategy-generator').startStrategyGenerator(PORT);
+    }).catch((e) => console.error('[SERVER-V2] background job start failed:', e?.stack || e));
   });
 
   const shutdown = () => {

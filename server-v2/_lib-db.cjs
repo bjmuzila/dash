@@ -326,7 +326,12 @@ function getPool() {
       // A statement running longer than this is cancelled by Postgres, so one bad
       // query fails on its own instead of holding a connection while the page
       // waits. Recorders with long jobs use their own pools.
-      statement_timeout: 45e3
+      statement_timeout: 45e3,
+      // 2026-10-09 audit: pg's default is to wait FOREVER for a free connection.
+      // With all 10 busy (a lock storm, a slow disk) every API request queued
+      // with no end, and nginx held the browser for 300s. Fail after 15s instead,
+      // so the route answers an error and the client's retry takes over.
+      connectionTimeoutMillis: 15e3
     });
     _pool.on("error", (err) => {
       console.warn("[db] idle pool client error (will reconnect):", err.message);

@@ -27085,3 +27085,34 @@ Brandon pasted a Python (pandas) Bollinger Trend script into Vela and got `Line 
   - `import user/lib/1 as m`, variables named `def` / `class` / `from`, and commented-out Python lines still parse.
   - The unit tests pass, the CB Script examples are identical, and the ready strategies give the same trades. `tsc` strict is clean.
 - **Files:** `cbedge-v3/src/pages/vela/script/lang.ts`, `cbedge-v3/src/pages/vela/script/runtime.ts`.
+
+## 2026-10-09 - Vela Prior Levels: lines to the right edge, labels against the price axis, and settings for both
+
+Brandon asked for the Voltick Prior Levels lines to run all the way right, with their labels all the way right, and for settings that cover all of it.
+
+- **Lines:** the newest session's PDH / PDL / PDC (and PWH / PWL, PMH / PML when on) now continue from the last bar to the chart's right edge. Older sessions still draw as steps.
+- **Labels:** these used to sit at the last bar with the line running through the text. They now sit at the right edge against the price axis, just above their line, and stay there through every pan and zoom.
+  - They are painted by a layer of their own (`PriorLabels`), because Vela reports the visible range only up to the last bar.
+  - Scrolled back in time, a label names the level of the session that reaches the right edge.
+  - Two labels at the same price sit side by side, each on its own line.
+- **Settings**, in three groups in the settings dialog:
+  - **Levels:** one row each for previous day high / low, previous close, previous week and previous month, with on / off, a colour and a dash (Solid / Dashed / Dotted). The defaults are the old look: Sky for the day, a dashed Paper close, slate for the week.
+  - **Lines:**
+    - Line width, from 1 to 4.
+    - **Newest levels:** to the right edge (the default) or to the last bar.
+    - Session and Sessions drawn, as before.
+  - **Labels:**
+    - Labels on / off. This is the old "Price tags", under the same key, so saved charts keep their choice.
+    - **Position:** right edge or last bar.
+    - **Placement:** above, on or below the line.
+    - **Text:** name and price, name, or price.
+    - **Size:** Tiny, Small, Normal or Large (10 / 11 / 13 / 15 px, off the type scale).
+  - The label rows show only while Labels is on.
+- **`common.ts`:** `seriesOf` takes an optional `lineStyle` (solid / dashed / dotted). The older `dashed` flag still works, so the other studies are unchanged.
+- **Checks:**
+  - `tsc` strict is clean on `index.ts`, `levels.ts` and `common.ts`.
+  - A run on four and a half sessions of 5-minute SPX bars gave the expected PDH / PDL / PDC, extension lines from the last bar with `extend: 'right'`, and labels at the right edge above their lines.
+  - Scrolled back with 3 sessions drawn, the labels named the earlier day's levels. With the lines stopping at the last bar, the labels moved to the last bar. The dotted, colour and width settings came through.
+  - No colour literals: the default colours are read from tokens.css when the dialog is built.
+  - Initial Balance and Overnight H/L are unchanged.
+- **Files:** `cbedge-v3/src/pages/vela/studies/levels.ts`, `studies/index.ts`, `studies/common.ts`.

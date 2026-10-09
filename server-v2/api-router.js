@@ -273,6 +273,81 @@ function register(pathname, def) {
   ROUTES.set(pathname, def);
 }
 
+// ── sharedGet: one computation per URL, the same bytes to everyone ──────────
+//
+// 2026-10-09 audit. Several GET routes answer every subscriber identically
+// (candle history, walls, the ticker roster) yet ran their DB queries once PER
+// REQUEST, through 2-connection pools shared with the recorders writing those
+// tables. A 3-chart Vela load queued six candle reads two at a time and took 7s.
+//
+// Wrapping a route def with sharedGet() puts a small cache in front of it:
+//   • keyed on the listed query params only (anything else is ignored), so
+//     junk params cannot mint new entries;
+//   • single-flight: concurrent misses for one key share one handler run;
+//   • only a 200 is kept, for ttl(url, status) ms; errors are never cached;
+//   • bounded (maxEntries, oldest dropped first).
+// Auth still runs per request in the dispatcher BEFORE this, so a cached body
+// only ever reaches someone the route's `auth` level admits. Use it only on
+// routes whose answer does not depend on who is asking.
+function sharedGet(def, { params, ttl, maxEntries = 400, name = 'shared' }) {
+  const handler = def.handler;
+  const cache = new Map();   // key → { at, ttlMs, status, headers, body }
+  const inflight = new Map(); // key → Promise<captured>
+  const stats = { hits: 0, misses: 0, shared: 0 };
+
+  const capture = (req, ctx, verdict) => new Promise((resolve, reject) => {
+    const headers = {};
+    const fake = {
+      statusCode: 200,
+      headersSent: false,
+      setHeader(k, v) { headers[String(k).toLowerCase()] = v; },
+      getHeader(k) { return headers[String(k).toLowerCase()]; },
+      removeHeader(k) { delete headers[String(k).toLowerCase()]; },
+      writeHead(code, h) { this.statusCode = code; if (h) for (const [k, v] of Object.entries(h)) this.setHeader(k, v); return this; },
+      write() { reject(new Error(`${name}: streaming response cannot be shared`)); return false; },
+      end(body) { this.headersSent = true; resolve({ status: this.statusCode, headers, body: body ?? '' }); },
+      on() { return this; }, once() { return this; },
+    };
+    Promise.resolve(handler(req, fake, ctx, verdict)).catch(reject);
+  });
+
+  const replay = (res, out, tag) => {
+    for (const [k, v] of Object.entries(out.headers)) res.setHeader(k, v);
+    res.setHeader('X-Shared-Cache', tag);
+    res.statusCode = out.status;
+    res.end(out.body);
+  };
+
+  def.handler = async (req, res, ctx, verdict) => {
+    if (req.method !== 'GET') return handler(req, res, ctx, verdict);
+    const u = new URL(req.url || '/', 'http://localhost');
+    const key = params.map((p) => `${p}=${u.searchParams.get(p) ?? ''}`).join('&');
+    const now = Date.now();
+    const hit = cache.get(key);
+    if (hit && now - hit.at < hit.ttlMs) { stats.hits += 1; return replay(res, hit, 'HIT'); }
+
+    let p = inflight.get(key);
+    if (p) stats.shared += 1;
+    else {
+      stats.misses += 1;
+      p = capture(req, ctx, verdict).finally(() => inflight.delete(key));
+      inflight.set(key, p);
+    }
+    let out;
+    try { out = await p; } catch (e) { return send(res, 500, { error: String(e?.message || e) }); }
+    const ttlMs = out.status === 200 ? Number(ttl(u, out)) || 0 : 0;
+    if (ttlMs > 0) {
+      cache.delete(key); // re-insert so Map order stays oldest-first
+      cache.set(key, { ...out, at: now, ttlMs });
+      while (cache.size > maxEntries) cache.delete(cache.keys().next().value);
+    }
+    replay(res, out, 'MISS');
+  };
+  SHARED_GET_STATS[name] = () => ({ ...stats, entries: cache.size, inflight: inflight.size });
+  return def;
+}
+const SHARED_GET_STATS = {};
+
 // Dynamic-segment routes (e.g. /api/snapshots/[id]). The dispatcher tries exact
 // ROUTES first, then these patterns; a match injects ctx.params.<key>. Patterns
 // use ':key' for a single path segment. Kept separate so the common exact-match
@@ -4662,19 +4737,29 @@ register('/api/vela/history', {
       VELA_HISTORY.set(key, { at: hit?.at ?? 0, body: hit?.body, p });
     }
     try {
-      const body = await p;
+      let body = await p;
       // An empty answer is cached too (briefly), so a symbol Yahoo does not
-      // carry costs one upstream call per minute, not one per chart.
-      VELA_HISTORY.set(key, { at: body.bars.length ? Date.now() : Date.now() - VELA_HISTORY_TTL_MS + 60_000, body });
+      // carry costs one upstream call per minute, not one per chart. But an
+      // empty answer never replaces bars we already had (2026-10-09): Yahoo
+      // hiccups return empty, and that used to blank every D/W/M chart.
+      if (!body.bars.length && hit?.body?.bars?.length) body = hit.body;
+      VELA_HISTORY.set(key, { at: body.bars.length && body !== hit?.body ? Date.now() : Date.now() - VELA_HISTORY_TTL_MS + 60_000, body });
       if (VELA_HISTORY.size > 500) {
         for (const [k, v] of VELA_HISTORY) if (!v.p && Date.now() - v.at > VELA_HISTORY_TTL_MS) VELA_HISTORY.delete(k);
       }
       return send(res, 200, body, { 'Cache-Control': 'private, max-age=300' });
     } catch (e) {
-      VELA_HISTORY.delete(key);
       VELA_HISTORY_STATS.fails += 1;
       VELA_HISTORY_STATS.lastFailAt = Date.now();
       VELA_HISTORY_STATS.lastFail = `${key}: ${String(e?.message || e).slice(0, 80)}`;
+      // Serve the last good bars rather than a 502 (2026-10-09). Before, a
+      // failure DELETED the good copy, and the client then marked the source
+      // missing for the life of the page. Retry upstream in a minute.
+      if (hit?.body?.bars?.length) {
+        VELA_HISTORY.set(key, { at: Date.now() - VELA_HISTORY_TTL_MS + 60_000, body: hit.body });
+        return send(res, 200, hit.body, { 'Cache-Control': 'private, max-age=60', 'X-Stale': '1' });
+      }
+      VELA_HISTORY.delete(key);
       return send(res, 502, { error: 'history source failed', detail: String(e?.message || e).slice(0, 200) });
     }
   },
@@ -4699,6 +4784,49 @@ healthProbe('velaHistory', () => {
 
 // /api/quotes-batch — batch day-change quotes + optional sparkline (Yahoo v8).
 // Pure fetch, no DB. Ported verbatim from app/api/quotes-batch/route.ts.
+// ── quotes-batch: shared per-symbol Yahoo cache (2026-10-09 audit) ──────────
+// Every open watchlist polls this every 15s with up to 200 symbols, and each
+// symbol was 1-2 uncached Yahoo calls with no timeout: 50 users × 20 symbols ≈
+// 1,000 Yahoo requests every 15s from one IP. If Yahoo blocks the box, D/W/M
+// history, earnings and basis all fail with it. Now one Yahoo call per symbol
+// per QUOTE_TTL_MS for everyone, at most QUOTE_CONCURRENCY at a time, each with
+// a timeout. A failed read (price null) is kept only briefly.
+const QUOTE_TTL_MS = Number(process.env.QUOTE_TTL_MS || 10_000);
+const QUOTE_FAIL_TTL_MS = 4_000;
+const QUOTE_CONCURRENCY = Number(process.env.QUOTE_CONCURRENCY || 8);
+const QUOTE_FETCH_TIMEOUT_MS = 5_000;
+const QUOTE_MAX_SYMBOLS = 200;
+const QUOTE_CACHE = new Map();    // `${yahoo}|${spark}` → { at, ttl, q }
+const QUOTE_INFLIGHT = new Map(); // same key → Promise<q>
+let quoteActive = 0;
+const quoteQueue = [];
+function quoteSlot() {
+  if (quoteActive < QUOTE_CONCURRENCY) { quoteActive += 1; return Promise.resolve(); }
+  return new Promise((resolve) => quoteQueue.push(resolve));
+}
+function quoteRelease() {
+  const next = quoteQueue.shift();
+  if (next) next(); else quoteActive -= 1;
+}
+function cachedQuote(key, load) {
+  const hit = QUOTE_CACHE.get(key);
+  if (hit && Date.now() - hit.at < hit.ttl) return Promise.resolve(hit.q);
+  const pending = QUOTE_INFLIGHT.get(key);
+  if (pending) return pending;
+  const p = (async () => {
+    await quoteSlot();
+    try { return await load(); } finally { quoteRelease(); }
+  })().then((q) => {
+    QUOTE_CACHE.delete(key);
+    QUOTE_CACHE.set(key, { at: Date.now(), ttl: q && q.price != null ? QUOTE_TTL_MS : QUOTE_FAIL_TTL_MS, q });
+    while (QUOTE_CACHE.size > 3000) QUOTE_CACHE.delete(QUOTE_CACHE.keys().next().value);
+    return q;
+  }).finally(() => QUOTE_INFLIGHT.delete(key));
+  QUOTE_INFLIGHT.set(key, p);
+  return p;
+}
+healthProbe('quotesBatch', () => ({ entries: QUOTE_CACHE.size, inflight: QUOTE_INFLIGHT.size, active: quoteActive, queued: quoteQueue.length, ttlMs: QUOTE_TTL_MS }));
+
 register('/api/quotes-batch', {
   auth: 'subscriber', methods: ['GET'],
   async handler(req, res) {
@@ -4736,7 +4864,7 @@ register('/api/quotes-batch', {
       const preStart = at(20 * 60) - 86_400; const rthStart = at(OPEN);
       try {
         const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=5m&range=2d&includePrePost=true`;
-        const r = await fetch(url, { headers: YH_HEADERS, cache: 'no-store' });
+        const r = await fetch(url, { headers: YH_HEADERS, cache: 'no-store', signal: AbortSignal.timeout(QUOTE_FETCH_TIMEOUT_MS) });
         if (!r.ok) return { sparkPre: [], sparkRth: [], session };
         const data = await r.json();
         const result = data?.chart?.result?.[0];
@@ -4761,7 +4889,7 @@ register('/api/quotes-batch', {
     async function fetchOne(yahooSym, withSpark = false) {
       try {
         const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=5d&includePrePost=true`;
-        const r = await fetch(url, { headers: YH_HEADERS, cache: 'no-store' });
+        const r = await fetch(url, { headers: YH_HEADERS, cache: 'no-store', signal: AbortSignal.timeout(QUOTE_FETCH_TIMEOUT_MS) });
         if (!r.ok) return { price: null, prevClose: null, change: null, pct: null };
         const data = await r.json();
         const result = data?.chart?.result?.[0];
@@ -4813,10 +4941,11 @@ register('/api/quotes-batch', {
     const symbols = url0.searchParams.get('symbols') || '';
     const withSpark = url0.searchParams.get('spark') === '1';
     if (!symbols) { send(res, 200, { data: { items: [] } }); return; }
-    const syms = symbols.split(',').map((s) => s.trim()).filter(Boolean);
+    const syms = symbols.split(',').map((s) => s.trim()).filter(Boolean).slice(0, QUOTE_MAX_SYMBOLS);
     const pairs = syms.map((sym) => ({ sym, yahoo: toYahoo(sym) }));
     const uniqueYahoo = [...new Set(pairs.map((p) => p.yahoo))];
-    const fetched = await Promise.all(uniqueYahoo.map((y) => fetchOne(y, withSpark).then((q) => [y, q])));
+    const fetched = await Promise.all(uniqueYahoo.map((y) =>
+      cachedQuote(`${y}|${withSpark ? 1 : 0}`, () => fetchOne(y, withSpark)).then((q) => [y, q])));
     const byYahoo = new Map(fetched);
     const items = pairs.map(({ sym, yahoo }) => {
       const q = byYahoo.get(yahoo) ?? { price: null, prevClose: null, change: null, pct: null };
@@ -6477,7 +6606,7 @@ if (libDb) {
   // Still a convenience list, not a whitelist — the picker accepts any ticker
   // typed into its search box, so a name missing here is findable, just not
   // browsable. That is why a failure returns an empty list and a 200.
-  register('/api/es-candles/tickers', {
+  register('/api/es-candles/tickers', sharedGet({
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
       const { CORE_TICKERS, getActiveRoster } = require('./far-cb-tickers');
@@ -6504,7 +6633,7 @@ if (libDb) {
         }
       }
     },
-  });
+  }, { name: 'esTickers', params: [], ttl: () => 120_000 }));
 
   // /api/journal — per-user trading journal CRUD ('user' — signed-in, own data).
   register('/api/journal', {
@@ -7022,7 +7151,7 @@ if (libDb) {
   });
 
   // /api/snapshots/candles
-  register('/api/snapshots/candles', {
+  register('/api/snapshots/candles', sharedGet({
     auth: 'subscriber', methods: ['GET', 'POST'],
     async handler(req, res) {
       const isNq = (sym) => !!sym && /nq/i.test(sym);
@@ -7110,7 +7239,16 @@ if (libDb) {
         send(res, 200, { rows });
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
-  });
+  }, {
+    // Shared since 2026-10-09 (sharedGet). The live tail rides the socket, so
+    // 15s is invisible on a chart; a past `date` never changes.
+    name: 'futCandles',
+    params: ['symbol', 'date', 'daysBack', 'limit', 'interval', 'contract', 'lite'],
+    ttl: (u) => {
+      const d = u.searchParams.get('date');
+      return d && d < etDateStr() ? 3_600_000 : 15_000;
+    },
+  }));
 
   // /api/snapshots/etf-candles — SPY / QQQ OHLC history out of the etf_candles
   // table (written by server-v2/etf-candle-recorder.js).
@@ -7150,7 +7288,7 @@ if (libDb) {
   //
   // `source` in the response says which path answered, so a thin chart can be
   // diagnosed without reading this comment.
-  register('/api/snapshots/etf-candles', {
+  register('/api/snapshots/etf-candles', sharedGet({
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
       // ET wall-clock parts for a bar timestamp — the row shape below is ET,
@@ -7248,6 +7386,44 @@ if (libDb) {
         }
         send(res, 200, { symbol, interval, days, source, rows });
       } catch (err) { send(res, 200, { rows: [], error: String(err) }); }
+    },
+  }, {
+    // Shared since 2026-10-09 (sharedGet): every viewer of SPY asked the DB
+    // (2-connection pool, shared with the recorder) separately. The recorder
+    // writes once a minute; Vela's own client cache is 20s. An `error` answer
+    // is not kept; an empty one (source:none) only briefly.
+    name: 'etfCandles',
+    params: ['symbol', 'days', 'interval', 'limit'],
+    ttl: (u, out) => {
+      const body = String(out.body || '');
+      if (body.includes('"error"')) return 0;
+      if (body.includes('"source":"none"')) return 5_000;
+      return 20_000;
+    },
+  }));
+
+  // /api/snapshots/etf-candles/live?symbol=QQQ&interval=1&bars=1 — the POLL
+  // read of the forming bar: { interval, rows: { QQQ: [ … ] } }.
+  //
+  // RESTORED 2026-10-09. The clients (board/gexCandles/candles.ts and Vela's
+  // cbedgeProvider.ts) poll this every 3s whenever the stream below has been
+  // quiet for 8s, but the route had gone missing from this router, so every
+  // poll fell through to the Next catch-all and came back 501 — the fallback for
+  // a dropped stream never worked. Memory read only (etf-live-candles.js);
+  // asking registers interest, so the hub keeps the symbol subscribed while
+  // someone polls. `symbols=A,B` reads up to 8 at once.
+  register('/api/snapshots/etf-candles/live', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const live = require('./etf-live-candles');
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const list = String(sp.get('symbols') ?? sp.get('symbol') ?? '')
+        .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const interval = Number(sp.get('interval') ?? 1) === 5 ? 5 : 1;
+      const bars = Math.max(1, Math.min(6, Number(sp.get('bars') ?? 1)));
+      if (!list.length) { send(res, 400, { error: 'symbol is required' }); return; }
+      const rows = live.getLiveCandleRows(list, interval, bars);
+      send(res, 200, { interval, rows }, { 'Cache-Control': 'private, no-store' });
     },
   });
 
@@ -11551,7 +11727,7 @@ Return exactly one element per input key, in the same order. Never merge, split,
   // always did — the multi form is a DIFFERENT key (`bySymbol`) rather than a
   // reshaped one, so a client that has not been updated cannot half-read it and
   // a client that HAS can tell an old server apart by the key being absent.
-  register('/api/walls-range', {
+  register('/api/walls-range', sharedGet({
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
       try {
@@ -11683,7 +11859,16 @@ Return exactly one element per input key, in the same order. Never merge, split,
         send(res, 500, { ok: false, error: String(e?.message || e) }, { 'Cache-Control': NO_STORE });
       }
     },
-  });
+  }, {
+    // Shared since 2026-10-09 (sharedGet). walls_log gains rows every 15 min;
+    // a past `end` date is settled.
+    name: 'wallsRange',
+    params: ['symbol', 'symbols', 'days', 'end', 'scope', 'basis'],
+    ttl: (u) => {
+      const end = u.searchParams.get('end');
+      return end && /^\d{4}-\d{2}-\d{2}$/.test(end) && end < etDateStr() ? 6 * 3_600_000 : 60_000;
+    },
+  }));
 
   // /api/core-hold — DOES THE OPENING BRACKET HOLD? Owner.
   //

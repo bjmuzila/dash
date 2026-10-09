@@ -168,6 +168,11 @@ async function writeFlowTape(tape, cursor = 'spx') {
     }
     const fresh = [...byKey.values()];
     if (!fresh.length) return;
+    // Nothing ingested since the last flush → every row in the lookback window
+    // is already in Postgres as it stands (any merged fill bumps lastFillAt).
+    // Without this the last ~6s of tape was re-upserted every 500ms for as long
+    // as the tape sat idle — all night and all weekend (2026-10-09 audit).
+    if (lastFlushedAt > 0 && !fresh.some((o) => fillAtOf(o) > lastFlushedAt)) return;
 
     const date = todayYmdET();
     const cols = 16;

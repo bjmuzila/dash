@@ -24,6 +24,7 @@
 // once, like CB Walls and Voltick Path. The rest are the user's to add.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { tokenHexAlpha } from '@/design/theme'
 import { defineStudy } from './common'
 
 // ── Option lists the settings dialogs offer (the impl modules parse the same strings) ──
@@ -50,12 +51,34 @@ export const RAIL_SIDES = ['Right', 'Left'] as const
 export const RAIL_STYLES = ['Rail', 'Heatmap', 'Profile'] as const
 /** The GEX Rail's expiries: the nearest one (the per-minute ladder) or every listed one summed (live). */
 export const RAIL_EXPIRIES = ['Nearest (0DTE)', 'All expirations'] as const
+/** All expirations: how far from spot a strike may be and still be summed (ladder.ts loadChainLadder). */
+export const RAIL_RANGES = ['±10%', '±15%', '±20%'] as const
 export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
 /** A whale bubble's fill, % — 30 is how they always drew; 100 is solid. */
 export const WH_OPACITY_DEF = 30
 export const TPO_ROWS = ['Auto', '0.25', '0.5', '1', '2', '5', '10', '25'] as const
+/** A level line's dash, for the studies that let each line pick one. */
+export const LINE_STYLES = ['Solid', 'Dashed', 'Dotted'] as const
+/** Prior Levels (Brandon, 2026-10-09): the newest levels run on to the chart's right edge, or stop at the last bar. */
+export const PRIOR_EXTEND = ['To the right edge', 'To the last bar'] as const
+/** Where Prior Levels' labels sit along the line, above / on / below it, what they say and how big. */
+export const PRIOR_LABEL_AT = ['Right edge', 'Last bar'] as const
+export const PRIOR_LABEL_SIDE = ['Above the line', 'On the line', 'Below the line'] as const
+export const PRIOR_LABEL_TEXT = ['Name and price', 'Name', 'Price'] as const
+export const PRIOR_LABEL_SIZE = ['Small', 'Tiny', 'Normal', 'Large'] as const
+/**
+ * Prior Levels' default colours, read off tokens.css when the settings are built:
+ * Voltick's Sky is the previous session; the week and the month are measurements,
+ * so slate and Paper (no valence, no reserved hue).
+ */
+export const PRIOR_COLORS = {
+  day: () => tokenHexAlpha('--color-vt-sky', 0.95),
+  close: () => tokenHexAlpha('--color-vt-quiet', 0.95),
+  week: () => tokenHexAlpha('--color-vt-slate', 0.95),
+  month: () => tokenHexAlpha('--color-vt-quiet', 0.95),
+} as const
 export const TPO_PERIODS = ['30 min', '15 min', '60 min'] as const
 
 export const PRIOR_TYPE = 'cbedge-prior-levels'
@@ -107,15 +130,49 @@ export function registerStudies(): void {
       title: 'Voltick Prior Levels · previous day / week / month high, low, close',
       shortTitle: 'Prior Levels',
       pane: 'price',
-      inputs: () => [
-        { key: 'day', title: 'Previous day', type: 'bool', defval: true },
-        { key: 'week', title: 'Previous week', type: 'bool', defval: true },
-        { key: 'month', title: 'Previous month', type: 'bool', defval: false },
-        { key: 'close', title: 'Previous close', type: 'bool', defval: true },
-        { key: 'basis', title: 'Session', type: 'string', defval: SESSION_BASIS[0], options: SESSION_BASIS, tooltip: 'Which bars a session high / low is taken from.' },
-        { key: 'sessions', title: 'Sessions drawn', type: 'int', defval: 1, min: 1, max: 120 },
-        { key: 'tags', title: 'Price tags', type: 'bool', defval: true },
-      ],
+      // the labels sit at the chart's right edge, so they are painted by a layer that follows every pan / zoom
+      layer: {},
+      // one row per level: on / off, its colour, its dash (Brandon, 2026-10-09: "give the settings options for all this")
+      inputs: () => {
+        const level = (key: 'day' | 'close' | 'week' | 'month', title: string, on: boolean, style: (typeof LINE_STYLES)[number]) => [
+          { key, title, type: 'bool' as const, defval: on, group: 'Levels', inline: key },
+          { key: `${key}Color`, title: '', type: 'color' as const, defval: PRIOR_COLORS[key](), group: 'Levels', inline: key },
+          { key: `${key}Style`, title: '', type: 'string' as const, defval: style, options: LINE_STYLES, group: 'Levels', inline: key },
+        ]
+        const labelsOn = { key: 'tags', equals: true }
+        return [
+          ...level('day', 'Previous day high / low', true, 'Solid'),
+          ...level('close', 'Previous close', true, 'Dashed'),
+          ...level('week', 'Previous week high / low', true, 'Solid'),
+          ...level('month', 'Previous month high / low', false, 'Solid'),
+          { key: 'width', title: 'Line width', type: 'int', defval: 1, min: 1, max: 4, group: 'Lines' },
+          {
+            key: 'extend',
+            title: 'Newest levels',
+            type: 'string',
+            defval: PRIOR_EXTEND[0],
+            options: PRIOR_EXTEND,
+            group: 'Lines',
+            tooltip: 'Where the lines of the newest session end: at the right edge of the chart, or at the last bar.',
+          },
+          { key: 'basis', title: 'Session', type: 'string', defval: SESSION_BASIS[0], options: SESSION_BASIS, group: 'Lines', tooltip: 'Which bars a session high / low is taken from.' },
+          { key: 'sessions', title: 'Sessions drawn', type: 'int', defval: 1, min: 1, max: 120, group: 'Lines' },
+          { key: 'tags', title: 'Labels', type: 'bool', defval: true, group: 'Labels' },
+          {
+            key: 'labelAt',
+            title: 'Position',
+            type: 'string',
+            defval: PRIOR_LABEL_AT[0],
+            options: PRIOR_LABEL_AT,
+            group: 'Labels',
+            when: labelsOn,
+            tooltip: 'Right edge: against the price axis, wherever the chart is scrolled. Last bar: beside the newest candle.',
+          },
+          { key: 'labelSide', title: 'Placement', type: 'string', defval: PRIOR_LABEL_SIDE[0], options: PRIOR_LABEL_SIDE, group: 'Labels', when: labelsOn },
+          { key: 'labelText', title: 'Text', type: 'string', defval: PRIOR_LABEL_TEXT[0], options: PRIOR_LABEL_TEXT, group: 'Labels', when: labelsOn },
+          { key: 'labelSize', title: 'Size', type: 'string', defval: PRIOR_LABEL_SIZE[0], options: PRIOR_LABEL_SIZE, group: 'Labels', when: labelsOn },
+        ]
+      },
     },
     () => import('./levels').then((m) => m.priorImpl),
   )
@@ -400,6 +457,15 @@ export function registerStudies(): void {
           defval: RAIL_EXPIRIES[0],
           options: RAIL_EXPIRIES,
           tooltip: 'Nearest (0DTE): the nearest expiry, minute by minute — the book the Voltick Path’s 0DTE walls are ranked on. All expirations: every listed expiry summed per strike, from the live chain (in a replay the rail keeps the nearest expiry, the only one recorded per minute).',
+        },
+        {
+          key: 'range',
+          title: 'Strike range',
+          type: 'string',
+          defval: RAIL_RANGES[0],
+          options: RAIL_RANGES,
+          when: { key: 'exp', equals: RAIL_EXPIRIES[1] },
+          tooltip: 'All expirations: only strikes within this distance of spot are summed and ranked, so far-dated, far-out open interest never crowds out the strikes near price.',
         },
         { key: 'tags', title: 'Level tags (Volt / Coil / Reversal / Surge)', type: 'bool', defval: true },
         { key: 'width', title: 'Rail width (px)', type: 'int', defval: 96, min: 72, max: 180, step: 4 },

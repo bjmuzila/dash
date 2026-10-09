@@ -69,6 +69,10 @@ const RECOMPUTE_MS_OFFHOURS = Number(process.env.RECOMPUTE_MS_OFFHOURS || 15000)
 // session's per-strike dayVolume + OI are stale; we force a re-pull rather than
 // depend on dxFeed reliably pushing the reset (it does so only sometimes).
 const SESSION_ROLL_HOUR_ET = Number(process.env.SESSION_ROLL_HOUR_ET || 18);
+// Writers nothing reads any more (2026-10-09 audit). Off unless LEGACY_RECORDERS=1.
+const LEGACY_RECORDERS = process.env.LEGACY_RECORDERS === '1';
+// Full-window candle rewrite cadence per stream (see _candleRowsToPersist).
+const CANDLE_HEAL_MS = Number(process.env.CANDLE_HEAL_MS || 10 * 60_000);
 const SESSION_ROLL_CHECK_MS = Number(process.env.SESSION_ROLL_CHECK_MS || 60000);
 // ── Expiry lock ──────────────────────────────────────────────────────────────
 // `this.expiry` is ONE value for the whole process: it selects what dxLink is
@@ -352,6 +356,10 @@ async function getAccessToken() {
       'User-Agent': process.env.TT_USER_AGENT || 'spx-gex-dashboard/1.0',
     },
     body,
+    // The REST calls below already had this; the token call did not, so a hung
+    // OAuth endpoint hung the feed start (and, before 2026-10-09, the whole
+    // server's listen()) indefinitely.
+    signal: AbortSignal.timeout(TT_HTTP_TIMEOUT_MS),
   });
   const text = await r.text().catch(() => '');
   if (!r.ok) {
@@ -3939,6 +3947,29 @@ class TastytradeProxy {
     return this.spot; // last resort: stale broker quote (no ES/basis yet)
   }
 
+  /**
+   * Which bars a candle flush writes to Postgres (2026-10-09 audit).
+   *
+   * Until now every flush upserted the WHOLE in-memory window (600 5m bars /
+   * 480 1m bars) every 5-10s: ~10-26M row versions a day for ~3.5k real bars,
+   * all on the web process's core. Every Candle event already marks its slot
+   * dirty (including the dxLink history replay on subscribe), so `delta` is
+   * exactly the set of bars that changed. Write that.
+   *
+   * The writer swallows its own errors, so a failed write would otherwise be
+   * lost for good. Once every CANDLE_HEAL_MS per stream the full window is
+   * written instead, which heals any bar a failed delta write dropped.
+   */
+  _candleRowsToPersist(key, rows, delta) {
+    if (!this._candleHealAt) this._candleHealAt = {};
+    const now = Date.now();
+    if (now - (this._candleHealAt[key] || 0) >= CANDLE_HEAL_MS) {
+      this._candleHealAt[key] = now;
+      return rows;
+    }
+    return delta;
+  }
+
   _flushEsCandles() {
     if (!this.esCandlesDirty) return;
     this.esCandlesDirty = false;
@@ -4037,7 +4068,10 @@ class TastytradeProxy {
     // scoring). Idempotent on signal_key, so re-scanning the last few closed
     // bars each flush is harmless and cheap. Display is computed client-side
     // from the same lib/momentumBias module — the WS payload is left untouched.
-    if (rows.length > 40) {
+    // Off by default since 2026-10-09: nothing reads momentum_bias_signals
+    // (/api/momentum-bias has no client), and this ran the bias index over the
+    // whole 600-bar window on every flush. LEGACY_RECORDERS=1 brings it back.
+    if (LEGACY_RECORDERS && rows.length > 40) {
       try {
         const bias = getMomentumBiasIndex(
           rows.map((r) => ({ high: +r.high, low: +r.low, close: +r.close }))
@@ -4073,7 +4107,8 @@ class TastytradeProxy {
     if (delta.length) marketState.setState({ esCandlesDelta: delta });
 
     // Persist only bars with real volume (skip empty forming snapshots).
-    writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+    // Only the bars that changed (see _candleRowsToPersist).
+    writeEsCandles(this._candleRowsToPersist('es5', rows, delta).filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
   /**
@@ -4098,7 +4133,7 @@ class TastytradeProxy {
     const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
     if (delta.length) marketState.setState({ nqCandlesDelta: delta });
 
-    writeNqCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+    writeNqCandles(this._candleRowsToPersist('nq5', rows, delta).filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
   /**
@@ -4133,7 +4168,7 @@ class TastytradeProxy {
     const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
     if (delta.length) marketState.setState({ es1mCandlesDelta: delta });
 
-    writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+    writeEsCandles(this._candleRowsToPersist('es1', rows, delta).filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
   /**
@@ -4160,7 +4195,7 @@ class TastytradeProxy {
     const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
     if (delta.length) marketState.setState({ nq1mCandlesDelta: delta });
 
-    writeNqCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+    writeNqCandles(this._candleRowsToPersist('nq1', rows, delta).filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
   _onEvent(ev) {

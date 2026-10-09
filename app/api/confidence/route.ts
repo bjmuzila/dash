@@ -13,7 +13,7 @@ const CACHE_TTL_MS = 60_000;
 const _cache = new Map<string, { at: number; body: unknown }>();
 
 // ── Tunables (SPX points) ───────────────────────────────────────────────────
-const HIT_PTS = 8;            // SPX pts within the MVC strike to count as a touch
+const HIT_PTS = 5;            // SPX pts within the MVC strike to count as a touch
 const PIVOT_PTS = 10;         // reversal of >= this many pts after touch = pivot
 const CHOP_BAND = 15;         // stayed within +/- this band of the level = chop
 const ANALOG_GEX_TOL = 0.25;  // gex-dominance similarity window (fraction)
