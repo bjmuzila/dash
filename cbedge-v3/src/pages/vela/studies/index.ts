@@ -40,6 +40,8 @@ export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
 /** Whale Prints: bought, sold, or both (Brandon, 2026-10-07). */
 export const WH_ACTION = ['Buys and sells', 'Buys', 'Sells'] as const
 export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
+/** Whale Prints: every strike, or out-of-the-money contracts only (Brandon, 2026-10-09). */
+export const WH_MONEY = ['All strikes', 'OTM only'] as const
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
 /** Net GEX's look: a line, columns, or both. */
 export const NETGEX_STYLES = ['Line', 'Columns', 'Line and columns'] as const
@@ -389,6 +391,15 @@ export function registerStudies(): void {
           tooltip: 'Buys: prints that were bought. Sells: prints that were sold. A print whose side is unknown shows only under Buys and sells.',
         },
         { key: 'exp', title: 'Expiry', type: 'string', defval: WH_EXP[0], options: WH_EXP, tooltip: '0DTE only: prints on contracts expiring that day. This week: expiring by that week’s Friday.' },
+        {
+          key: 'money',
+          title: 'Strikes',
+          type: 'string',
+          defval: WH_MONEY[0],
+          options: WH_MONEY,
+          tooltip:
+            'OTM only: calls struck at or above the underlying’s price when they printed, puts at or below it. A print whose price then is not known is left out.',
+        },
         {
           key: 'cap',
           title: 'Biggest bubble at',

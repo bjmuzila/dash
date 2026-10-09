@@ -27,7 +27,10 @@
 //                (gexBasis.ts: OI only / OI + Vol / Vol only) picks which recorded
 //                walls the levels come from, falling back to the session's
 //                per-minute ladder when that book has no slot yet (vtPathData)
-//   Contracts    0DTE / Non-0DTE — which expiries the walls were computed from
+//   Contracts    0DTE / Non-0DTE — which expiries the walls were computed from.
+//                Non-0DTE is every listed expiry after today, uncapped (2026-10-09:
+//                the Options Chain's ⅀ Total / Ticker Lookup's board; server-v2
+//                scanner-variants.js). Sessions before then were the next 4 inside 45 DTE.
 //   Node levels  boldness, 0–100%, default 15 — Voltick's Node levels slider; 0 hides
 //   Calm chart   Voltick's Calm chart: smaller, quieter marks
 //   Sessions     how many recorded sessions to draw, newest first (1–60, default 1)
@@ -79,7 +82,7 @@ function inputsSchema(shape: Shape): InputSchema[] {
       type: 'string',
       defval: SCOPE_OPTS[0],
       options: SCOPE_OPTS,
-      tooltip: 'Which expiries the walls are computed from: recorded both ways, as on CB Walls.',
+      tooltip: '0DTE: the nearest expiry, minute by minute (the GEX Rail’s book). Non-0DTE: every listed expiry after today summed per strike, the board the Options Chain’s ⅀ Total and Analysis → Ticker Lookup show, recorded every 15 minutes.',
     },
     {
       key: 'boldness',

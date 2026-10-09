@@ -448,7 +448,67 @@ async function snapshotTicker(root, { pick = null } = {}) {
  *
  * Returns { symbol, spot, variants: [...] } or { err } naming why it failed.
  */
-async function snapshotTickerVariants(root, { includeAgg = true } = {}) {
+/** Raw gex-calculator input rows for one expiration, thin strikes dropped. */
+async function expiryGexRows(root, expiry) {
+  const [expiryRows, volMap] = await Promise.all([
+    optSrc.buildExpiryRows(root, expiry).catch(() => []),
+    typeof optSrc.fetchVolumeTheta === 'function'
+      ? optSrc.fetchVolumeTheta(root, expiry).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  if (!volMap?.size) console.warn(`[scanner] ${root} ${expiry}: no volume — OI-only basis this sweep`);
+  // Keep a strike that has traded today even with zero OI — it still carries
+  // netVolGEX, so dropping it would hide a wall being built right now. On the
+  // 'vol' basis that strike IS the signal.
+  return toGexRows(expiryRows, volMap).filter((r) => r.oi > 0 || r.volume > 0 || r.gamma !== 0);
+}
+
+/**
+ * NON-0DTE: the expirations the aggregate leg sums — every listed one strictly
+ * AFTER today (ET), nearest first, the set the Options Chain's ⅀ Total and Ticker
+ * Lookup's right pane read (scanner-variants.js). The env caps apply only when set.
+ */
+function aggExpiries(chain, today = etDateStr()) {
+  const exps = (chain?.expirations ?? []).filter((e) => /^\d{4}-\d{2}-\d{2}/.test(String(e)) && String(e).slice(0, 10) > today);
+  let picked = [...new Set(exps)].sort();
+  if (V.AGG_MAX_DTE > 0) {
+    const dteOf = new Map();
+    for (const c of chain?.contracts ?? []) {
+      if (!dteOf.has(c.expiration) && Number.isFinite(Number(c.dte))) dteOf.set(c.expiration, Number(c.dte));
+    }
+    picked = picked.filter((e) => { const d = dteOf.get(e); return d == null || d <= V.AGG_MAX_DTE; });
+  }
+  return V.AGG_MAX_EXPIRIES > 0 ? picked.slice(0, V.AGG_MAX_EXPIRIES) : picked;
+}
+
+/**
+ * The aggregate ('agg') variants for one root: every expiration after today,
+ * per-expiry ladders summed per strike. [] when nothing is listed past today or
+ * the merged board is too thin. `chain` / `spot` are reused when the caller has them.
+ */
+async function aggVariantsFor(root, { chain = null, spot = 0 } = {}) {
+  const ch = chain ?? (await optSrc.fetchChainTheta(root).catch(() => null));
+  const picked = aggExpiries(ch);
+  if (!picked.length) return [];
+  const px = spot > 0 ? spot : await resolveSpot(root);
+  if (!(px > 0)) return [];
+  const chunks = [];
+  for (const e of picked) {
+    chunks.push(await expiryGexRows(root, e)); // eslint-disable-line no-await-in-loop
+  }
+  const flat = chunks.flat();
+  if (!flat.length) return [];
+  // Per-expiry ladders computed independently, then summed per strike —
+  // gamma is per contract and cannot be pooled before the exposure math.
+  const merged = computeGexRowsMultiExpiry(flat, px);
+  if (merged.length < MIN_STRIKES) return [];
+  return V.BASES.map((basis) => ({
+    scope: 'agg', basis, expiry: picked[0], expiries: picked.length, spot: px,
+    ...levelsFor(merged, px, basis),
+  }));
+}
+
+async function snapshotTickerVariants(root, { includeAgg = false } = {}) {
   const chain = await optSrc.fetchChainTheta(root).catch(() => null);
   const exps = chain?.expirations ?? [];
   const front = exps[0];
@@ -457,63 +517,46 @@ async function snapshotTickerVariants(root, { includeAgg = true } = {}) {
   const spot = await resolveSpot(root);
   if (!(spot > 0)) return { err: 'no-spot' };
 
-  /** Raw gex-calculator input rows for one expiration, thin strikes dropped. */
-  const buildRows = async (expiry) => {
-    const [expiryRows, volMap] = await Promise.all([
-      optSrc.buildExpiryRows(root, expiry).catch(() => []),
-      typeof optSrc.fetchVolumeTheta === 'function'
-        ? optSrc.fetchVolumeTheta(root, expiry).catch(() => null)
-        : Promise.resolve(null),
-    ]);
-    if (!volMap?.size) console.warn(`[scanner] ${root} ${expiry}: no volume — OI-only basis this sweep`);
-    // Keep a strike that has traded today even with zero OI — it still carries
-    // netVolGEX, so dropping it would hide a wall being built right now. On the
-    // 'vol' basis that strike IS the signal.
-    return toGexRows(expiryRows, volMap).filter((r) => r.oi > 0 || r.volume > 0 || r.gamma !== 0);
-  };
-
   const variants = [];
 
   // ── 0DTE leg: chain.expirations[0], the nearest listed contract ────────────
-  const frontRaw = await buildRows(front);
+  const frontRaw = await expiryGexRows(root, front);
   if (frontRaw.length < MIN_STRIKES) return { err: `thin-${frontRaw.length}` };
   const frontRows = computeGexRows(frontRaw, spot);
   for (const basis of V.BASES) {
     variants.push({ scope: '0dte', basis, expiry: front, expiries: 1, ...levelsFor(frontRows, spot, basis) });
   }
 
-  // ── aggregate leg: every OTHER listed expiration, summed per strike ────────
-  if (includeAgg && exps.length > 1) {
-    const dteOf = new Map();
-    for (const c of chain?.contracts ?? []) {
-      if (!dteOf.has(c.expiration) && Number.isFinite(Number(c.dte))) dteOf.set(c.expiration, Number(c.dte));
-    }
-    // Bounded — see scanner-variants.js. Nearest-first, so what is dropped is
-    // always the far tail, which carries the least gamma.
-    const picked = exps.slice(1)
-      .filter((e) => { const d = dteOf.get(e); return d == null || d <= V.AGG_MAX_DTE; })
-      .slice(0, V.AGG_MAX_EXPIRIES);
-    const chunks = [];
-    for (const e of picked) {
-      chunks.push(await buildRows(e)); // eslint-disable-line no-await-in-loop
-    }
-    const flat = chunks.flat();
-    if (flat.length) {
-      // Per-expiry ladders computed independently, then summed per strike —
-      // gamma is per contract and cannot be pooled before the exposure math.
-      const merged = computeGexRowsMultiExpiry(flat, spot);
-      if (merged.length >= MIN_STRIKES) {
-        for (const basis of V.BASES) {
-          variants.push({
-            scope: 'agg', basis, expiry: picked[0], expiries: picked.length,
-            ...levelsFor(merged, spot, basis),
-          });
-        }
-      }
-    }
-  }
+  // ── aggregate leg (Non-0DTE): runs on its own loop now (runAggSweep). Only a
+  // caller that asks for it here gets it inline (a manual one-root fire).
+  if (includeAgg) variants.push(...(await aggVariantsFor(root, { chain, spot })));
 
   return { symbol: root, spot, variants };
+}
+
+// ── Batched insert ──────────────────────────────────────────────────────────
+
+const SNAP_COLS = ['date', 'symbol', 'ts', 'spot', 'expiry', 'total_net_gex', 'call_wall', 'put_wall',
+  'gex_flip', 'cb', 'strikes', 'call_wall_gex', 'put_wall_gex', 'cb_gex'];
+const VAR_COLS = ['date', 'symbol', 'ts', 'expiry_scope', 'basis', 'expiry', 'expiries', 'spot',
+  'total_net_gex', 'call_wall', 'put_wall', 'gex_flip', 'cb', 'strikes', 'call_wall_gex',
+  'put_wall_gex', 'cb_gex'];
+
+/** One multi-row INSERT … ON CONFLICT DO NOTHING, chunked under the 65535-param cap. */
+async function insertMany(p, table, cols, rows) {
+  const CHUNK = Math.floor(30000 / cols.length);
+  for (let start = 0; start < rows.length; start += CHUNK) {
+    const slice = rows.slice(start, start + CHUNK);
+    const params = [];
+    const tuples = slice.map((r) => {
+      const ph = r.map((v) => { params.push(v); return `$${params.length}`; });
+      return `(${ph.join(',')})`;
+    });
+    await p.query( // eslint-disable-line no-await-in-loop
+      `INSERT INTO ${table} (${cols.join(', ')}) VALUES ${tuples.join(', ')} ON CONFLICT DO NOTHING`,
+      params,
+    );
+  }
 }
 
 // ── Sweep ────────────────────────────────────────────────────────────────────
@@ -537,11 +580,43 @@ async function runSweep({ force = false } = {}) {
   let variantRows = 0;
   const errors = [];
 
-  // The aggregate leg is the only part of the sweep that costs extra upstream
-  // calls, and a 30-day board moves on open interest — which updates once a day.
-  // So it rides a sub-cadence: 0DTE every sweep, 'agg' every Nth.
+  // The aggregate (Non-0DTE) leg is NOT run here any more: the whole board after
+  // today is too many chain calls for a 1-minute sweep. runAggSweep, below, owns it.
   _sweepN += 1;
-  const includeAgg = V.VARIANTS_ENABLED && (force || _sweepN % V.AGG_EVERY_N_SWEEPS === 1 || V.AGG_EVERY_N_SWEEPS === 1);
+  const includeAgg = false;
+
+  // BATCHED WRITES (2026-10-09 audit). This used to send one INSERT per row —
+  // 1 into scanner_snapshots plus one per variant, ~7 statements per root, ~780
+  // a minute across the roster, each its own round trip and commit. Rows are now
+  // buffered and flushed as multi-row INSERTs every FLUSH_EVERY roots and once at
+  // the end, so a sweep is a handful of statements. Same rows, same `ts` (the
+  // sweep start, as before), same ON CONFLICT DO NOTHING. Flushing every N roots
+  // rather than only at the end keeps the board filling during a long sweep —
+  // walls-recorder's slot sampler reads whatever is newest when it fires.
+  const FLUSH_EVERY = 20;
+  const snapRows = [];
+  const varRows = [];
+  let pendingRoots = 0;
+  const flush = async () => {
+    if (snapRows.length) {
+      const rows = snapRows.splice(0);
+      await insertMany(p, 'scanner_snapshots', SNAP_COLS, rows);
+      written += rows.length;
+    }
+    if (varRows.length) {
+      const rows = varRows.splice(0);
+      await insertMany(p, 'scanner_variants', VAR_COLS, rows);
+      variantRows += rows.length;
+    }
+    pendingRoots = 0;
+  };
+  const flushSafe = async () => {
+    try { await flush(); } catch (e) {
+      // One failed batch must not abort the rest of the sweep: log it and keep
+      // going. Those roots are re-sampled on the next sweep a minute later.
+      errors.push(`batch:${String(e?.message || e).slice(0, 60)}`);
+    }
+  };
 
   for (const root of tickers) {
     // Sequential — keep upstream REST load gentle across many roots.
@@ -555,39 +630,82 @@ async function runSweep({ force = false } = {}) {
       // one row per symbol per sweep, on the nearest expiry, OI+Vol basis.
       const def = s.variants.find((v) => v.scope === V.DEFAULT_SCOPE && v.basis === V.DEFAULT_BASIS);
       if (def) {
-        await p.query( // eslint-disable-line no-await-in-loop
-          `INSERT INTO scanner_snapshots
-             (date, symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, cb, strikes,
-              call_wall_gex, put_wall_gex, cb_gex)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-           ON CONFLICT DO NOTHING`,
-          [date, root, now, s.spot, def.expiry, def.totalNetGex, def.callWall, def.putWall, def.gexFlip,
-            def.cb, def.strikes, def.callWallGex, def.putWallGex, def.cbGex],
-        );
-        written++;
+        snapRows.push([date, root, now, s.spot, def.expiry, def.totalNetGex, def.callWall, def.putWall, def.gexFlip,
+          def.cb, def.strikes, def.callWallGex, def.putWallGex, def.cbGex]);
       }
-
       if (V.VARIANTS_ENABLED) {
         for (const v of s.variants) {
-          await p.query( // eslint-disable-line no-await-in-loop
-            `INSERT INTO scanner_variants
-               (date, symbol, ts, expiry_scope, basis, expiry, expiries, spot, total_net_gex,
-                call_wall, put_wall, gex_flip, cb, strikes, call_wall_gex, put_wall_gex, cb_gex)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-             ON CONFLICT DO NOTHING`,
-            [date, root, now, v.scope, v.basis, v.expiry, v.expiries, s.spot, v.totalNetGex,
-              v.callWall, v.putWall, v.gexFlip, v.cb, v.strikes, v.callWallGex, v.putWallGex, v.cbGex],
-          );
-          variantRows++;
+          varRows.push([date, root, now, v.scope, v.basis, v.expiry, v.expiries, s.spot, v.totalNetGex,
+            v.callWall, v.putWall, v.gexFlip, v.cb, v.strikes, v.callWallGex, v.putWallGex, v.cbGex]);
         }
       }
+      pendingRoots++;
+      if (pendingRoots >= FLUSH_EVERY) await flushSafe(); // eslint-disable-line no-await-in-loop
     } catch (e) {
       errors.push(`${root}:${String(e?.message || e).slice(0, 60)}`);
     }
   }
+  await flushSafe();
 
   console.log(`[scanner] wrote ${written}/${tickers.length} tickers${V.VARIANTS_ENABLED ? ` · ${variantRows} variant rows${includeAgg ? ' (incl. agg)' : ''}` : ''} @ ${now.toISOString()}${errors.length ? ` (skipped: ${errors.join(', ')})` : ''}`);
   return { ok: true, written, variantRows, includeAgg, total: tickers.length, date, errors };
+}
+
+// ── Non-0DTE sweep: its own loop ─────────────────────────────────────────────
+//
+// Every root, every expiration after today, summed per strike (aggVariantsFor),
+// written to scanner_variants as scope 'agg' — the rows walls-recorder samples on
+// its 15-minute slots for the Non-0DTE walls (Vela's Voltick Path / CB Walls on
+// Non-0DTE, the Level Log's Wall Migration). AGG_CONCURRENCY roots at a time; a
+// pass that outlasts AGG_INTERVAL_MINS is not overlapped.
+
+let _aggInFlight = false;
+
+async function runAggSweep({ force = false } = {}) {
+  if (!V.VARIANTS_ENABLED) return { skipped: 'variants off' };
+  if (!force && !inSweepWindow()) return { skipped: 'outside sweep window' };
+  if (_aggInFlight) return { skipped: 'previous agg sweep still running' };
+  _aggInFlight = true;
+  const t0 = Date.now();
+  try {
+    const tickers = await resolveScannerTickers();
+    if (!tickers.length) return { skipped: 'no SCANNER_TICKERS' };
+    const p = getPool();
+    if (!p || !(await ensureSchema())) return { skipped: 'no DB' };
+    const date = etDateStr();
+    const queue = [...tickers];
+    let rows = 0;
+    let roots = 0;
+    let expiries = 0;
+    const errors = [];
+    const worker = async () => {
+      while (queue.length) {
+        const root = queue.shift();
+        if (!root) return;
+        try {
+          const vs = await aggVariantsFor(root); // eslint-disable-line no-await-in-loop
+          if (!vs.length) { errors.push(`${root}:none`); continue; }
+          // stamped when ITS board was read, not when the pass began: a pass takes minutes
+          const now = new Date();
+          // One statement per root (all its bases) instead of one per row.
+          await insertMany(p, 'scanner_variants', VAR_COLS, vs.map((v) => ( // eslint-disable-line no-await-in-loop
+            [date, root, now, v.scope, v.basis, v.expiry, v.expiries, v.spot, v.totalNetGex,
+              v.callWall, v.putWall, v.gexFlip, v.cb, v.strikes, v.callWallGex, v.putWallGex, v.cbGex])));
+          rows += vs.length;
+          roots++;
+          expiries += vs[0].expiries || 0;
+        } catch (e) {
+          errors.push(`${root}:${String(e?.message || e).slice(0, 60)}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(V.AGG_CONCURRENCY, queue.length) }, worker));
+    const secs = Math.round((Date.now() - t0) / 1000);
+    console.log(`[scanner] agg (Non-0DTE) wrote ${roots}/${tickers.length} roots · ${rows} rows · ${expiries} expiries summed · ${secs}s${errors.length ? ` (skipped: ${errors.slice(0, 20).join(', ')}${errors.length > 20 ? ` +${errors.length - 20}` : ''})` : ''}`);
+    return { ok: true, roots, rows, expiries, secs, total: tickers.length, date, errors };
+  } finally {
+    _aggInFlight = false;
+  }
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -628,13 +746,23 @@ function startScannerRecorder() {
   if (_timer.unref) _timer.unref();
   // Initial run after 12s so the terminal/feed can warm up.
   setTimeout(() => { void tickSweep('initial sweep'); }, 12_000);
+  // The Non-0DTE board, on its own loop (runAggSweep): first pass a minute in,
+  // after the 0DTE sweep has warmed the chain caches.
+  if (V.VARIANTS_ENABLED) {
+    const aggTick = () => {
+      runAggSweep().catch((e) => console.warn('[scanner] agg sweep error:', e.message));
+    };
+    const aggTimer = setInterval(aggTick, V.AGG_INTERVAL_MINS * 60 * 1000);
+    if (aggTimer.unref) aggTimer.unref();
+    setTimeout(aggTick, 60_000);
+  }
   // The roster is re-resolved per sweep, so this line is a snapshot of the
   // universe at boot, not a fixed roster for the process lifetime.
-  console.log(`[scanner] recorder started — ${parseScannerTickers().length} roots every ${INTERVAL_MINS}m (roster re-resolved each sweep)${V.VARIANTS_ENABLED ? ` · variants on, agg leg every ${V.AGG_EVERY_N_SWEEPS} sweeps (≤${V.AGG_MAX_EXPIRIES} expiries, ≤${V.AGG_MAX_DTE}DTE)` : ' · variants off'}`);
+  console.log(`[scanner] recorder started — ${parseScannerTickers().length} roots every ${INTERVAL_MINS}m (roster re-resolved each sweep)${V.VARIANTS_ENABLED ? ` · variants on, Non-0DTE board every ${V.AGG_INTERVAL_MINS}m on its own loop (every expiry after today${V.AGG_MAX_EXPIRIES > 0 ? `, ≤${V.AGG_MAX_EXPIRIES}` : ''}${V.AGG_MAX_DTE > 0 ? `, ≤${V.AGG_MAX_DTE}DTE` : ''}, ${V.AGG_CONCURRENCY} at a time)` : ' · variants off'}`);
 }
 
 module.exports = {
-  startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers, resolveScannerTickers,
+  startScannerRecorder, runSweep, runAggSweep, aggVariantsFor, aggExpiries, ensureSchema, getPool, parseScannerTickers, resolveScannerTickers,
   findCoreBullseye, gexAtStrike, basisNet, levelsFor, snapshotTickerVariants,
   // shared with forward-scanner-recorder.js so both sweeps compute a wall the
   // same way — one definition of call wall / put wall / CORE, two horizons.

@@ -84,7 +84,11 @@ async function ensureTable(p) {
   // column instead of `upper(underlying) = ANY(...)`, which can't use a plain
   // btree index and forces a per-row scan of the whole date partition.
   await p.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
-  await p.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
+  // flow_prints_date_norm_ts_idx (date, underlying_norm, ts) is NO LONGER
+  // created here (2026-10-09 audit). The covering index below has the exact same
+  // key columns, so it serves every query the plain one did, and keeping both
+  // meant two index writes per inserted print on the busiest table in the box.
+  // Do not re-add it; the prod copy is dropped by hand once this ships.
   // Covering index for /proxy/flow-netprem (see server-with-proxy.js) so the
   // per-bin aggregate query on a hot ticker like SPX can be answered as an
   // index-only scan instead of a heap fetch per matching row.
@@ -132,6 +136,28 @@ const COALESCE_MS = Number(process.env.FLOW_COALESCE_MS || 5000);
 // on the boundary still gets one more upsert.
 const FLUSH_LOOKBACK_MS = COALESCE_MS + 1000;
 
+// Per cursor: key `ts|symbol|side` -> { sig: rowSig(), at: lastFillAt } as last written. Lets a
+// flush skip orders whose numbers have not moved since the previous tick.
+const sentByCursor = new Map();
+const SENT_MAX = 50_000; // safety valve; normal size is the last few seconds of tape
+function rowSig(o) {
+  return [
+    Math.round(Number(o.size)), Number(o.price), Number(o.premium), o.action ?? '',
+    o.bucket ?? '', typeof o.isOtm === 'boolean' ? o.isOtm : '',
+    Number.isFinite(Number(o.spot)) && Number(o.spot) > 0 ? Number(o.spot) : '',
+  ].join('|');
+}
+
+// Database-side backstop for the same thing: a conflicting row whose values are
+// identical is left alone instead of rewritten. Covers what the in-memory skip
+// cannot — the first flush after a restart and backfillFlowRows() re-runs.
+const UPSERT_CHANGED_ONLY = `WHERE (flow_prints.size, flow_prints.price, flow_prints.premium, flow_prints.action,
+                flow_prints.bucket, flow_prints.is_otm, flow_prints.underlying_norm, flow_prints.spot)
+        IS DISTINCT FROM
+              (EXCLUDED.size, EXCLUDED.price, EXCLUDED.premium, EXCLUDED.action,
+               EXCLUDED.bucket, EXCLUDED.is_otm, EXCLUDED.underlying_norm,
+               COALESCE(EXCLUDED.spot, flow_prints.spot))`;
+
 /**
  * Persist new/updated tape entries. Fire-and-forget; never throws into caller.
  * @param {Array<object>} tape  FlowOrder-shaped entries (oldest-first)
@@ -166,13 +192,26 @@ async function writeFlowTape(tape, cursor = 'spx') {
       if (fillAtOf(o) < cutoff) continue;
       byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
     }
-    const fresh = [...byKey.values()];
-    if (!fresh.length) return;
-    // Nothing ingested since the last flush → every row in the lookback window
-    // is already in Postgres as it stands (any merged fill bumps lastFillAt).
-    // Without this the last ~6s of tape was re-upserted every 500ms for as long
-    // as the tape sat idle — all night and all weekend (2026-10-09 audit).
-    if (lastFlushedAt > 0 && !fresh.some((o) => fillAtOf(o) > lastFlushedAt)) return;
+    if (!byKey.size) return;
+    // Row-level skip (replaces the coarse "nothing newer than the cursor" test,
+    // which could strand a print ingested in the same millisecond as a flush): the lookback re-offers every order of the last ~6s on each
+    // 500ms tick, so one print used to be upserted ~12 times with the same
+    // numbers — a new heap tuple (and covering-index entry) every time. Only rows
+    // whose written values actually changed go out now. `sent` holds what this
+    // cursor last wrote per key and is trimmed to the lookback window below.
+    const sent = sentByCursor.get(cursor) || new Map();
+    sentByCursor.set(cursor, sent);
+    const fresh = [];
+    for (const [key, o] of byKey) {
+      if (sent.get(key)?.sig !== rowSig(o)) fresh.push(o);
+    }
+    if (!fresh.length) {
+      // Everything in the window is already in Postgres as it stands.
+      let hi = lastFlushedAt;
+      for (const o of byKey.values()) { const f = fillAtOf(o); if (Number.isFinite(f) && f > hi) hi = f; }
+      lastFlushedByCursor.set(cursor, hi);
+      return;
+    }
 
     const date = todayYmdET();
     const cols = 16;
@@ -236,11 +275,18 @@ async function writeFlowTape(tape, cursor = 'spx') {
            bucket = EXCLUDED.bucket,
            is_otm = EXCLUDED.is_otm,
            underlying_norm = EXCLUDED.underlying_norm,
-           spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
+           spot = COALESCE(EXCLUDED.spot, flow_prints.spot)
+         ${UPSERT_CHANGED_ONLY}`,
         params
       );
+      for (const o of slice) sent.set(`${o.ts}|${o.symbol}|${o.side}`, { sig: rowSig(o), at: fillAtOf(o) });
     }
     lastFlushedByCursor.set(cursor, maxFillAt);
+    // Keep `sent` to the keys the next lookback can still offer. Worst case a
+    // dropped key is just written once more, which the WHERE backstop absorbs.
+    const keepFrom = maxFillAt - FLUSH_LOOKBACK_MS * 2;
+    for (const [key, v] of sent) if (!(v.at >= keepFrom)) sent.delete(key);
+    if (sent.size > SENT_MAX) sent.clear();
   } catch (e) {
     console.warn('[flow-history] write failed (will retry next tick):', e.message);
     const msg = String(e?.message || '');
@@ -323,7 +369,8 @@ async function backfillFlowRows(rows, dateYmd) {
          bucket = EXCLUDED.bucket,
          is_otm = EXCLUDED.is_otm,
          underlying_norm = EXCLUDED.underlying_norm,
-         spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
+         spot = COALESCE(EXCLUDED.spot, flow_prints.spot)
+       ${UPSERT_CHANGED_ONLY}`,
       params,
     );
     sent += slice.length;

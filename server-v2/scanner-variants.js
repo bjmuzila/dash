@@ -13,11 +13,15 @@
  *     '0dte'  the nearest listed contract, `chain.expirations[0]`. What every
  *             level on this page has always been. For SPX/SPY/QQQ that is the
  *             same-day contract; for a single name it is the front weekly.
- *     'agg'   every OTHER listed expiration, summed per strike. "All
- *             expirations minus 0DTE" — the board without today's contract
- *             dominating it. Bounded by AGG_MAX_EXPIRIES / AGG_MAX_DTE below,
- *             because "all" on a name with 20 listed expiries is 20 upstream
- *             chain calls per ticker per sweep and the sweep runs every minute.
+ *     'agg'   every listed expiration AFTER TODAY, summed per strike, with no
+ *             cap (2026-10-09, Brandon: Non-0DTE must be what the Options Chain's
+ *             ⅀ Total and Analysis → Ticker Lookup's right pane show). The same
+ *             set those pages read: `expiration > today (ET)`, so a single name
+ *             whose front weekly is not today keeps it here, as they do. Until
+ *             then it was the next 4 expiries inside 45 DTE (AGG_MAX_EXPIRIES /
+ *             AGG_MAX_DTE, still there as optional env caps, 0 = none). Too many
+ *             chain calls for the 1-minute sweep, so it runs on its OWN loop
+ *             (scanner-recorder runAggSweep, AGG_INTERVAL_MINS).
  *
  *   basis
  *     'oivol' netGEX + netVolGEX — open interest AND the day's volume. The
@@ -67,7 +71,7 @@ function normalize(scope, basis) {
 /** Human label, for logs and for the client's switcher tooltips. */
 const SCOPE_LABEL = {
   '0dte': 'Nearest expiry (0DTE)',
-  agg: 'All expirations minus 0DTE',
+  agg: 'All expirations after today (Non-0DTE)',
 };
 const BASIS_LABEL = {
   oivol: 'OI + Volume GEX',
@@ -75,20 +79,22 @@ const BASIS_LABEL = {
   oi: 'OI-only GEX',
 };
 
-// ── Aggregate-leg bounds ─────────────────────────────────────────────────────
-// "All expirations minus 0DTE" is bounded on purpose. Each extra expiration is
-// one more whole-chain fetch per ticker per sweep, and the sweep now runs every
-// minute across ~168 roots. Four expirations inside 45 days covers the front
-// weeklies plus the monthly, which is where essentially all of the non-0DTE
-// gamma sits; going deeper buys thinner and thinner strikes at linear cost.
-const AGG_MAX_EXPIRIES = Number(process.env.SCANNER_AGG_MAX_EXPIRIES || 4);
-const AGG_MAX_DTE = Number(process.env.SCANNER_AGG_MAX_DTE || 45);
-/**
- * Run the aggregate leg only every Nth sweep. The 0DTE contract genuinely does
- * move minute to minute; a 30-day board moves on open interest, which updates
- * once a day. Default 5 keeps the non-0DTE variants on their old 5-minute
- * cadence while 0DTE goes to 1m.
- */
+// ── Aggregate leg ────────────────────────────────────────────────────────────
+// THE WHOLE BOARD MINUS TODAY, uncapped by default (header). Each expiration is
+// one TastyTrade by-type fetch (tt-snapshot coalesces OI, volume and greeks into
+// it), so a pass over ~168 roots is a couple of thousand fetches: far too many for
+// the 1-minute 0DTE sweep. It runs on its own loop instead (runAggSweep):
+//   AGG_INTERVAL_MINS  how often a pass STARTS (a pass still running is not
+//                      overlapped; the next tick is skipped)
+//   AGG_CONCURRENCY    roots fetched at once inside a pass
+// walls-recorder accepts an agg sample up to WALLS_AGG_SAMPLE_AGE_MINS (40) old,
+// so a pass must finish inside that to land on every 15-minute slot.
+// The caps are opt-in brakes for a bad day upstream: 0 = no cap.
+const AGG_MAX_EXPIRIES = Number(process.env.SCANNER_AGG_MAX_EXPIRIES || 0);
+const AGG_MAX_DTE = Number(process.env.SCANNER_AGG_MAX_DTE || 0);
+const AGG_INTERVAL_MINS = Math.max(1, Number(process.env.SCANNER_AGG_INTERVAL_MINS || 5));
+const AGG_CONCURRENCY = Math.max(1, Number(process.env.SCANNER_AGG_CONCURRENCY || 3));
+/** No longer read (the agg leg left the main sweep); kept so an old env or import does not break. */
 const AGG_EVERY_N_SWEEPS = Math.max(1, Number(process.env.SCANNER_AGG_EVERY_N_SWEEPS || 5));
 
 /** Master switch — '0' writes the legacy default row only. */
@@ -98,5 +104,5 @@ module.exports = {
   EXPIRY_SCOPES, BASES, VARIANTS,
   DEFAULT_SCOPE, DEFAULT_BASIS, isDefault, normalize,
   SCOPE_LABEL, BASIS_LABEL,
-  AGG_MAX_EXPIRIES, AGG_MAX_DTE, AGG_EVERY_N_SWEEPS, VARIANTS_ENABLED,
+  AGG_MAX_EXPIRIES, AGG_MAX_DTE, AGG_INTERVAL_MINS, AGG_CONCURRENCY, AGG_EVERY_N_SWEEPS, VARIANTS_ENABLED,
 };

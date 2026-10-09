@@ -1501,7 +1501,9 @@ async function ensureFlowPrintsSchema(pool) {
     `);
     await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
     await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS spot REAL');
-    await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
+    // flow_prints_date_norm_ts_idx is no longer created (2026-10-09): the
+    // covering index below has the same key columns and serves the same queries.
+    // See state/flow-history-writer.js. Do not re-add it.
     // Covering index for /proxy/flow-netprem: that query filters on type/side/
     // premium/is_otm, none of which are in the index above, so a hot ticker
     // (SPX 0DTE, hundreds of k prints/day) forces a heap fetch per matching row

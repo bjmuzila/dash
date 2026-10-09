@@ -27131,3 +27131,18 @@ Brandon asked for a transparency filter in the Voltick Path settings.
   - In Chromium, the fade at 40% took an opaque bead's alpha from 255 to 102 and a half-alpha band's from 128 to 51, with colours kept.
   - The compositing mode is restored afterwards, and the next frame draws at full strength again, so nothing builds up.
 - **Files:** `cbedge-v3/src/pages/vela/vtPath/vtPathIndicator.ts`, `vtPath/vtPathLayer.ts`.
+
+## 2026-10-09 - Vela Whale Prints: Strikes filter (All strikes / OTM only)
+
+Brandon asked for the whale prints to have an OTM-or-all filter.
+
+- **Strikes** is a new setting on Whale Prints, under Expiry: **All strikes** (the default, as before) or **OTM only**.
+- **What counts as OTM:** a call struck at or above the underlying's price when it printed, or a put struck at or below it. This is the same test as the hover card's OTM cell, so a bubble that shows under OTM only reads OTM on its card.
+- **Missing spot:** a print with no recorded spot is judged on its candle's close (on ES / NQ, less that session's basis). With neither, or with no call / put type, OTM only leaves it out.
+- It filters the prints already loaded, so changing it repaints without a new read.
+- **Checks:**
+  - `tsc` strict is clean on `flow.ts` and `index.ts`.
+  - On sample prints, OTM only kept the OTM call, the OTM put, the at-the-money call and a no-spot call above the candle's close.
+  - It dropped the ITM call, the ITM put, a no-spot put above the close and a print with no type.
+  - All strikes kept all 8.
+- **Files:** `cbedge-v3/src/pages/vela/studies/flow.ts`, `studies/index.ts`.

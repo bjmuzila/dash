@@ -22,6 +22,21 @@ const EXPIRIES_PER_TICKER = Number(process.env.MULT_GREEK_GEX_EXPIRIES || 4);
 const STRIKE_WINDOW = Number(process.env.MULT_GREEK_GEX_WINDOW || 60); // ± strikes around ATM
 const INTERVAL_MS = Number(process.env.MULT_GREEK_GEX_INTERVAL_MS || 60_000);
 const RING_MS = Number(process.env.MULT_GREEK_GEX_RING_MS || 45 * 60_000);
+// Pruning cadence (2026-10-09 audit). The ring used to be trimmed with a DELETE
+// on every 60s tick and the open table re-offered every row every tick. Readers
+// only ever ask for "the newest row at or before <cutoff>" with cutoffs ≤ 30 min
+// back, so rows a few minutes past RING_MS are invisible to them; trimming every
+// 10 min instead of every minute changes nothing they can see.
+const RING_PRUNE_MS = Number(process.env.MULT_GREEK_GEX_PRUNE_MS || 10 * 60_000);
+const OPEN_PRUNE_MS = 6 * 60 * 60_000;
+let lastRingPrune = 0;
+let lastOpenPrune = 0;
+// `${session}|${ticker}|${expiry}` already written to mult_greek_gex_open. The
+// open row is the FIRST reading of the day and is never changed after, so once a
+// (ticker, expiry) has been written there is nothing left to send for it today.
+// Process-lifetime: after a restart each pair is offered once more and
+// ON CONFLICT DO NOTHING keeps the original (true) open.
+const openDone = new Set();
 
 // ── pg pool (mirrors gex-history-writer) ────────────────────────────────────
 let pool = null;
@@ -148,6 +163,7 @@ async function collectOnce(base, opts = {}) {
   const today = todayETStr();
   const ringVals = [], ringParams = [];
   const openVals = [], openParams = [];
+  const openPairs = [];
   let ri = 0, oi = 0;
 
   for (const ticker of TICKERS) {
@@ -171,14 +187,19 @@ async function collectOnce(base, opts = {}) {
         const spot = Number(json?.data?.underlyingPrice ?? 0) || 0;
         const use = items.length ? items : all;
         if (!(spot > 0) || !use.length) continue;
+        const openKey = `${today}|${ticker}|${exp}`;
+        const needOpen = !openDone.has(openKey);
+        if (needOpen) openPairs.push(openKey);
         for (const row of computeGexRows(use, spot)) {
           let net = row.net;
           if (!Number.isFinite(net)) continue;
           if (Math.abs(net) < 1e-9) net = 0;
           ringVals.push(`($${++ri}, $${++ri}, $${++ri}, $${++ri}, $${++ri})`);
           ringParams.push(now, ticker, exp, row.strike, net);
-          openVals.push(`($${++oi}, $${++oi}, $${++oi}, $${++oi}, $${++oi}, $${++oi})`);
-          openParams.push(today, ticker, exp, row.strike, net, now);
+          if (needOpen) {
+            openVals.push(`($${++oi}, $${++oi}, $${++oi}, $${++oi}, $${++oi}, $${++oi})`);
+            openParams.push(today, ticker, exp, row.strike, net, now);
+          }
         }
       } catch (e) {
         console.warn(`[mult-greek-gex] ${ticker} ${exp} fetch failed: ${e.message}`);
@@ -193,14 +214,25 @@ async function collectOnce(base, opts = {}) {
        ON CONFLICT (ts, ticker, expiry, strike) DO NOTHING`,
       ringParams,
     );
-    // Open = first RTH reading of the ET day; keep the earliest.
-    await p.query(
-      `INSERT INTO mult_greek_gex_open (session_date, ticker, expiry, strike, net_gex, ts) VALUES ${openVals.join(', ')}
-       ON CONFLICT (session_date, ticker, expiry, strike) DO NOTHING`,
-      openParams,
-    );
-    await p.query('DELETE FROM mult_greek_gex_ring WHERE ts < $1', [now - RING_MS]);
-    await p.query("DELETE FROM mult_greek_gex_open WHERE session_date < (now() at time zone 'America/New_York')::date - 3");
+    // Open = first RTH reading of the ET day; keep the earliest. Only pairs not
+    // yet written this session — see openDone.
+    if (openVals.length) {
+      await p.query(
+        `INSERT INTO mult_greek_gex_open (session_date, ticker, expiry, strike, net_gex, ts) VALUES ${openVals.join(', ')}
+         ON CONFLICT (session_date, ticker, expiry, strike) DO NOTHING`,
+        openParams,
+      );
+      for (const k of openPairs) openDone.add(k);
+      for (const k of openDone) if (!k.startsWith(`${today}|`)) openDone.delete(k);
+    }
+    if (now - lastRingPrune >= RING_PRUNE_MS) {
+      await p.query('DELETE FROM mult_greek_gex_ring WHERE ts < $1', [now - RING_MS]);
+      lastRingPrune = now;
+    }
+    if (now - lastOpenPrune >= OPEN_PRUNE_MS) {
+      await p.query("DELETE FROM mult_greek_gex_open WHERE session_date < (now() at time zone 'America/New_York')::date - 3");
+      lastOpenPrune = now;
+    }
   } catch (e) {
     console.warn('[mult-greek-gex] write failed:', e.message);
     const msg = String(e?.message || '');

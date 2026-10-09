@@ -51,7 +51,13 @@
 //                  a Buys / sells setting shows only bought or only sold prints.
 //                  On ES / NQ a day is the futures session (2026-10-09): from
 //                  18:00 ET the evening before, so the night's SPX / NDX prints
-//                  show on the Globex candles too.
+//                  show on the Globex candles too. Strikes (2026-10-09, Brandon:
+//                  "needs a OTM or all filter"): All strikes, or OTM only —
+//                  calls struck at or above the underlying's price when they
+//                  printed, puts at or below, the same test as the card's OTM
+//                  cell. A print with no recorded spot is judged on its candle's
+//                  close (on ES / NQ less that session's basis); with neither,
+//                  OTM only leaves it out. A repaint, not a new read.
 //                  printed and the underlying's price then, sized by premium:
 //                  green bullish (calls bought, puts sold), red bearish, grey
 //                  when the side is unknown.
@@ -66,7 +72,7 @@ import type { OHLCV, PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, FUT_OPEN, RTH_OPEN, barAt, bool, studyImpl, etDateKey, etMinutesOfDay, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
-import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_ACTION, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
+import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_ACTION, WH_CAP, WH_EXP, WH_MIN, WH_MONEY, WH_OPACITY_DEF, WH_SIDE } from './index'
 import { gexBasis, gexBasisShort } from '@/pages/vela/gexBasis'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhaleContext, type WhaleCtxLine, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
@@ -673,6 +679,8 @@ interface WhS {
   fill: number
   text: boolean
   exp: 'all' | '0dte' | 'week' | 'no0dte'
+  /** Out-of-the-money prints only (the Strikes setting). */
+  otm: boolean
 }
 const WH_MIN_V = [1e6, 2e6, 5e6, 10e6]
 const WH_CAP_V = [25e6, 10e6, 50e6, 100e6]
@@ -756,10 +764,16 @@ function expOk(r: WhRow, exp: WhS['exp']): boolean {
   return dte >= 0 && dte <= Math.max(0, 5 - wd)
 }
 
+/** How far out of the money, as a fraction of `spot` (negative: in the money); null when it can't be told. */
+function otmDistance(r: WhRow, spot: number | null): number | null {
+  if (r.strike == null || spot == null || !(spot > 0) || !r.type) return null
+  return r.type === 'C' ? (r.strike - spot) / spot : (spot - r.strike) / spot
+}
+
 /** `4.6%` out of the money (a negative distance is in the money), from the underlying's price then. */
 function moneyness(r: WhRow): { k: string; v: string } | null {
-  if (r.strike == null || r.spot == null || !(r.spot > 0) || !r.type) return null
-  const d = r.type === 'C' ? (r.strike - r.spot) / r.spot : (r.spot - r.strike) / r.spot
+  const d = otmDistance(r, r.spot)
+  if (d == null) return null
   return { k: d >= 0 ? 'OTM' : 'ITM', v: `${Math.abs(d * 100).toFixed(1)}%` }
 }
 
@@ -864,6 +878,17 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
     if (!expOk(r, s.exp)) continue
     if (r.ts < first || r.ts >= lastEnd) continue
     if (data!.fromMs != null && r.ts < data!.fromMs) continue
+    if (s.otm) {
+      // the recorded spot, else the candle's close in index terms (ES / NQ: less that session's basis)
+      let spot = r.spot
+      if (spot == null) {
+        const i = barAt(bars, r.ts, tfMs)
+        const sh = i < 0 ? null : shiftFor(r.ts)
+        spot = i < 0 || sh == null ? null : bars[i]!.close - sh
+      }
+      const d = otmDistance(r, spot)
+      if (d == null || d < 0) continue
+    }
     const key = `${Math.floor(r.ts / 60_000)}|${biasOf(r)}`
     const g = groups.get(key)
     if (g) g.push(r)
@@ -952,6 +977,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
       fill: int(i.opacity, WH_OPACITY_DEF, 5, 100) / 100,
       text: bool(i.text, true),
       exp: (['all', '0dte', 'week', 'no0dte'] as const)[Math.max(0, (WH_EXP as readonly string[]).indexOf(str(i.exp, WH_EXP[0])))] ?? 'all',
+      otm: str(i.money, WH_MONEY[0]) === WH_MONEY[1],
     }
   },
   dataKey: (c, s) => `${flowTicker(c)}|${s.minPremium}|${s.days}`,

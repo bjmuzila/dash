@@ -29,8 +29,8 @@
  * Reactions: reject | break_lt5 | break_5 | consolidated | new_wall | pin.
  *
  * FOUR VARIANTS (2026-08-27). Every slot is now recorded four times over — the
- * two expiry scopes ('0dte' = the nearest listed contract, 'agg' = every other
- * listed expiration summed per strike) crossed with the two GEX bases ('oivol'
+ * two expiry scopes ('0dte' = the nearest listed contract, 'agg' = every listed
+ * expiration after today summed per strike, uncapped since 2026-10-09) crossed with the two GEX bases ('oivol'
  * = OI + today's volume, 'vol' = today's volume alone). See scanner-variants.js.
  * walls_log and wall_events carry `expiry_scope` / `basis` columns defaulting to
  * the historical pair, so every row written before this change is correctly
@@ -222,7 +222,7 @@ async function ensureSchema() {
       -- ── The four variants (2026-08-27) ─────────────────────────────────────
       -- expiry_scope: '0dte' = chain.expirations[0], the nearest listed
       --               contract — what every row before this change was.
-      --               'agg'  = every OTHER listed expiration, summed per strike.
+      --               'agg'  = every listed expiration after today, summed per strike.
       -- basis:        'oivol' = netGEX + netVolGEX (OI + today's volume).
       --               'vol'   = netVolGEX alone (today's volume only).
       -- The defaults are the historical pair on purpose: existing rows are
@@ -400,13 +400,13 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 // filled from the latest ladder column on the same reading the scanner uses
 // (levelsFor in scanner-recorder.js): CORE = biggest |vol GEX|, call wall =
 // biggest +vol GEX above spot, put wall = most -vol GEX below spot, both walls
-// excluding the CORE. 0DTE = the nearest expiry on the ladder; Non-0DTE = the
-// next AGG_LADDER_EXPIRIES expiries after it, summed per strike.
+// excluding the CORE. 0DTE = the nearest expiry on the ladder; Non-0DTE = every
+// expiry on the ladder AFTER TODAY, summed per strike (the scanner's own rule,
+// scanner-variants.js: the Options Chain's ⅀ Total / Ticker Lookup's board).
 // A level the scanner row already has is never replaced.
 
 /** Scanner symbol → ladder symbol. SPX is stored as '$SPX' on the ladder. */
 const LADDER_SYMBOL = { SPX: '$SPX', SPY: 'SPY', QQQ: 'QQQ' };
-const AGG_LADDER_EXPIRIES = 4;
 
 const isoDay = (v) => {
   const t = String(v ?? '');
@@ -452,7 +452,7 @@ async function ladderLevels(p, date, variant) {
     const m = bySym.get(histSym);
     if (!m || !m.size) continue;
     const exps = [...m.keys()].sort();
-    const pick = variant.scope === 'agg' ? exps.slice(1, 1 + AGG_LADDER_EXPIRIES) : exps.slice(0, 1);
+    const pick = variant.scope === 'agg' ? exps.filter((e) => e > date) : exps.slice(0, 1);
     if (!pick.length) continue;
     const byStrike = new Map();
     let spot = 0;
