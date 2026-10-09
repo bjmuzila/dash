@@ -99,7 +99,7 @@ import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 import EmCustomer from "@/components/dashboard/EmCustomer";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
-import { MultGreekClient } from "@/app/mult-greek/MultGreekClient";
+import { MultGreekClient } from "@/components/legacy/MultGreekClient";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    THEME — the ONLY place this file names a color.

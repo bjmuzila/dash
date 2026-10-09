@@ -19,12 +19,12 @@ const OptionsChain = lazy(() => import('@/components/pages/OptionsChain'))
 // /options (the "Options" toolbar tile) was removed 2026-08-12. Options Chain
 // (/options-chain, above) is a different page and is unaffected.
 // mult-greek/page.tsx is a server component; mount its client UI (named export).
-const MultGreek    = lazy(() => import('@/app/mult-greek/MultGreekClient').then((m) => ({ default: m.MultGreekClient })))
+const MultGreek    = lazy(() => import('@/components/legacy/MultGreekClient').then((m) => ({ default: m.MultGreekClient })))
 const Em           = lazy(() => import('@/components/pages/Em'))
 // /levels — universe-wide CB/CW/PW board. Client component under app/, so it
 // is imported straight from '@/app' like MultGreekClient rather than through a
 // components/pages wrapper.
-const Levels       = lazy(() => import('@/app/levels/page'))
+const Levels       = lazy(() => import('@/components/legacy/LevelsPage'))
 const Flow         = lazy(() => import('@/components/pages/Flow'))
 // /premarket — the premarket prep board (regime, walls, flip, overnight
 // context, expected range, playbook). Lives in components/pages/ like every

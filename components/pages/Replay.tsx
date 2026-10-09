@@ -32,7 +32,7 @@ const TickerLookupCard = lazy(() =>
   import("@/components/pages/Analytics").then((m) => ({ default: m.TickerLookupCard })),
 );
 const MultGreekClient = lazy(() =>
-  import("@/app/mult-greek/MultGreekClient").then((m) => ({ default: m.MultGreekClient })),
+  import("@/components/legacy/MultGreekClient").then((m) => ({ default: m.MultGreekClient })),
 );
 const OptionsChainPage = lazy(() => import("@/components/pages/OptionsChain"));
 

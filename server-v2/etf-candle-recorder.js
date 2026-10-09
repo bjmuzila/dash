@@ -414,6 +414,10 @@ function announceRoster(roster) {
 // Skipping is the right response and costs nothing: the next tick re-fetches
 // the whole day anyway, so a missed minute is filled in a minute later.
 let ticking = false;
+// Set when the boot backfill was skipped for a market-hours start (see
+// startEtfCandleRecorder): the first tick then treats the whole roster as
+// already historied instead of backfilling every name through the tick path.
+let seedHistoriedOnFirstTick = false;
 
 // SHORT WINDOW, FULL SWEEP EVERY N TICKS (2026-10-09). Every tick used to pull
 // the whole day from ET midnight for the whole roster: by 09:40 that was ~55k
@@ -448,6 +452,10 @@ async function tick() {
     // Names the Watchlists page added since boot. They need HISTORY, not just
     // today, or the chart opens on a stub — see `historied`. Done first and on
     // its own so the per-minute pull below stays one predictable-size request.
+    if (seedHistoriedOnFirstTick) {
+      roster.forEach((s) => historied.add(s));
+      seedHistoriedOnFirstTick = false;
+    }
     const fresh = BACKFILL_DAYS > 0 ? roster.filter((s) => !historied.has(s)) : [];
     if (fresh.length) {
       console.log(`[etf-candle] ${fresh.length} new symbol(s) on the roster — backfilling ${BACKFILL_DAYS}d: ${fresh.join(',')}`);
@@ -587,7 +595,22 @@ function startEtfCandleRecorder() {
   // tick's today-only bars. The multi-symbol path is not cached at all, so that
   // particular race is gone — but the ordering is still right, because a chart
   // opened in the first minute should find history rather than one session.
-  if (BACKFILL_DAYS > 0) {
+  // A RESTART DURING MARKET HOURS SKIPS THE BOOT BACKFILL (2026-10-09). The
+  // five-session re-pull of the whole roster is the heaviest thing this recorder
+  // does, and on 2026-10-09 a 09:18 restart ran it into the open alongside every
+  // other boot job, pinning the dashboard's one core for the first hour. The
+  // prior sessions are already in the table (it has been recording for weeks),
+  // so in session the boot pass is pure cost. 08:00–16:30 ET on weekdays it is
+  // skipped unless ETF_CANDLE_BACKFILL_DAYS is set explicitly; the per-minute
+  // tick still records today from the first minute. Outside those hours (a
+  // night or weekend restart) the backfill runs exactly as before.
+  const { weekday, mins } = etWallMins();
+  const inSession = weekday !== 'Sat' && weekday !== 'Sun' && mins >= 8 * 60 && mins < 16 * 60 + 30;
+  const skipBoot = inSession && process.env.ETF_CANDLE_BACKFILL_DAYS == null;
+  if (skipBoot) {
+    seedHistoriedOnFirstTick = true;
+    console.log('[etf-candle] market-hours start — boot backfill skipped (prior sessions are already recorded; set ETF_CANDLE_BACKFILL_DAYS to force it)');
+  } else if (BACKFILL_DAYS > 0) {
     setTimeout(() => {
       backfill().catch((e) => console.warn('[etf-candle] backfill error:', e.message));
     }, 5_000);
@@ -611,7 +634,7 @@ function startEtfCandleRecorder() {
     `(04:00-20:00 ET), roster resolved per tick from the owner Watchlists page ` +
     `(${SYMBOLS.length} hot` +
     (process.env.ETF_CANDLE_WIDE === '0' ? ', wide lane off)' : ` + far-CB, cap ${WIDE_MAX})`) +
-    (BACKFILL_DAYS > 0 ? `, ${BACKFILL_DAYS}d backfill on boot in chunks of ${BACKFILL_CHUNK}` : ''),
+    (BACKFILL_DAYS > 0 && !skipBoot ? `, ${BACKFILL_DAYS}d backfill on boot in chunks of ${BACKFILL_CHUNK}` : ''),
   );
 }
 

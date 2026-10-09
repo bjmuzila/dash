@@ -1,4 +1,5 @@
 "use client";
+// Moved from app/test/DealerGammaTab.tsx (2026-10-09) when the old Next page was deleted; the v2 /app SPA (app-vite) still renders it.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";

@@ -349,6 +349,32 @@ const { verifyWsRequest } = require('./ws-auth');
 const { handleApiRoute } = require('./api-router');
 const { initObservability, captureError } = require('./observability');
 
+// Old Next pages deleted on 2026-10-09 → where that content lives now (see the
+// RETIRED NEXT PAGES block just above the Next fallthrough).
+const RETIRED_NEXT_PAGES = {
+  '/dashboard': '/home',
+  '/overview': '/home',
+  '/top10': '/',
+  '/quotes': '/',
+  '/chat': '/',
+  '/about-me': '/',
+  '/toolbar-preview': '/',
+  '/gex': '/v3',
+  '/gex2': '/v3',
+  '/es-candles': '/v3',
+  '/mult-greek': '/v3',
+  '/footprint': '/v3',
+  '/squeeze': '/v3',
+  '/market-matrix': '/v3',
+  '/obook': '/v3',
+  '/premarket': '/v3/premarket',
+  '/logic-order': '/v3/scanner',
+  '/scanner/ib-embed': '/v3/scanner',
+  '/mobile': '/v3/m',
+  '/levels': '/app/levels',
+  '/test': '/app/test',
+  '/logs': '/home',
+};
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const DEV = process.env.NODE_ENV !== 'production';
 
@@ -5768,6 +5794,21 @@ async function main() {
       } catch (err) {
         captureError(err, { route: req.url, method: req.method, at: 'api-router' });
         sendJson(res, 500, { error: String(err?.message || err) }, req);
+        return;
+      }
+    }
+    // RETIRED NEXT PAGES (2026-10-09). Their page files were deleted; old
+    // bookmarks, Discord posts and emails still point at them, so each URL is
+    // sent to where that content lives now instead of a 404. 307 (temporary),
+    // the same rule lib/v3Routes.ts follows. The query string is kept.
+    {
+      let legacyPath = '';
+      try { legacyPath = new URL(req.url || '/', 'http://localhost').pathname.replace(/\/+$/, '') || '/'; } catch { /* ignore */ }
+      const to = RETIRED_NEXT_PAGES[legacyPath];
+      if (to && (req.method === 'GET' || req.method === 'HEAD')) {
+        const qs = (req.url || '').includes('?') ? (req.url || '').slice((req.url || '').indexOf('?')) : '';
+        res.writeHead(307, { Location: to + qs, 'Cache-Control': 'no-store' });
+        res.end();
         return;
       }
     }

@@ -3432,8 +3432,24 @@ class TastytradeProxy {
     // subset) — start it once, on the first ticker(s) this feed ever sees.
     if (isFirstRun) {
       if (this.strikeGrowthTimer) clearInterval(this.strikeGrowthTimer);
-      this.strikeGrowthTimer = setInterval(() => {
-        for (const root of this.strikeGrowthTickers) this._subscribeStrikeGrowthRoot(root).catch(() => {});
+      // ONE ROOT AT A TIME, NEVER OVERLAPPING (2026-10-09). This used to fire
+      // _subscribeStrikeGrowthRoot for EVERY watchlist ticker at once, every
+      // 5 minutes: each one a REST chain pull + parse the moment its cache
+      // lapsed, so ~100 of them landed together on the one event-loop thread —
+      // the stalls on 2026-10-09 clustered on those 5-minute marks. Now the
+      // refresh walks the roster sequentially (as the boot pass already did),
+      // and a refresh still running when the next is due is simply skipped.
+      this.strikeGrowthRefreshing = false;
+      this.strikeGrowthTimer = setInterval(async () => {
+        if (this.strikeGrowthRefreshing) return;
+        this.strikeGrowthRefreshing = true;
+        try {
+          for (const root of [...this.strikeGrowthTickers]) {
+            await this._subscribeStrikeGrowthRoot(root).catch(() => {}); // eslint-disable-line no-await-in-loop
+          }
+        } finally {
+          this.strikeGrowthRefreshing = false;
+        }
       }, STRIKE_GROWTH_FEED_REFRESH_MS);
       if (this.strikeGrowthTimer.unref) this.strikeGrowthTimer.unref();
     }

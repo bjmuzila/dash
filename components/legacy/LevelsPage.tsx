@@ -1,3 +1,4 @@
+// Moved from app/levels/page.tsx (2026-10-09) when the old Next page was deleted; the v2 /app SPA (app-vite) still renders it.
 // ─────────────────────────────────────────────────────────────────────────────
 // app/levels/page.tsx — /levels
 //

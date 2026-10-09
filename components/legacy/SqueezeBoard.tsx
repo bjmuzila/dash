@@ -1,4 +1,5 @@
 "use client";
+// Moved from app/squeeze/page.tsx (2026-10-09) when the old Next page was deleted; the v2 /app SPA (app-vite) still renders it.
 
 /**
  * /squeeze — SPX/SPY Gamma Exposure + Gamma-Squeeze Screener.

@@ -2,11 +2,27 @@
 #   -SkipBuild   : skip the local build gate (VPS Docker build still gates live)
 #   -LocalBuild  : force the local build gate ON
 #   -NoCache     : force a clean VPS image rebuild (use after dependency changes)
+#   -Force       : push even during market hours (see the guard below)
 param(
     [switch]$SkipBuild,
     [switch]$LocalBuild,
-    [switch]$NoCache
+    [switch]$NoCache,
+    [switch]$Force
 )
+
+# --- market-hours guard (2026-10-09) ---
+# A push rebuilds every image ON the live VPS and restarts the dashboard. On
+# 2026-10-09 one push at 09:01 ET restarted the server into the open and the
+# site crawled for the next hour. So: no pushes 09:00-16:15 ET on weekdays
+# unless you pass -Force on purpose (an outage fix you cannot wait on).
+$etNow = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'Eastern Standard Time')
+$etMins = $etNow.Hour * 60 + $etNow.Minute
+$etWeekday = ($etNow.DayOfWeek -ne [DayOfWeek]::Saturday) -and ($etNow.DayOfWeek -ne [DayOfWeek]::Sunday)
+if ($etWeekday -and $etMins -ge 540 -and $etMins -lt 975 -and -not $Force) {
+    Write-Host ("MARKET HOURS ({0:HH:mm} ET) - push blocked. Pushes rebuild and restart the live server." -f $etNow) -ForegroundColor Red
+    Write-Host "Push after 16:15 ET, or re-run with -Force if this is an outage fix that cannot wait." -ForegroundColor Yellow
+    exit 1
+}
 
 $repoRoot = "C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed"
 $packageJsonPath = "$repoRoot\package.json"

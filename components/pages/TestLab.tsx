@@ -5,10 +5,10 @@ import type { CSSProperties } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED, homeButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
-import { SqueezeBoard } from "@/app/squeeze/page";
-import DealerGammaTab from "@/app/test/DealerGammaTab";
-import GexMapTab from "@/app/test/GexMapTab";
-import PremDiffTab from "@/app/test/PremDiffTab";
+import { SqueezeBoard } from "@/components/legacy/SqueezeBoard";
+import DealerGammaTab from "@/components/legacy/testlab/DealerGammaTab";
+import GexMapTab from "@/components/legacy/testlab/GexMapTab";
+import PremDiffTab from "@/components/legacy/testlab/PremDiffTab";
 // Seasonality lives in components/seasonality/ — it is mounted twice: here in
 // the Test Lab and on the public /explore/seasonality page. The old
 // app/test/SeasonalityTab.tsx is a dead tombstone (export {}), which is what
