@@ -28,6 +28,13 @@
 //     thinnest never under RIBBON_MIN_FLOOR.
 //   · A SIZE SETTING: `size` (the studies' Bubble size % / Ribbon thickness %)
 //     multiplies every radius / band height after all of the above.
+//   · AN OPACITY SETTING (2026-10-09, Brandon: "the voltick path needs a
+//     transparency filter in the settings"): `opacity` (the studies' Opacity %)
+//     fades everything the layer drew in one step once the frame is painted —
+//     every pixel's alpha times the setting (destination-in), so overlaps fade
+//     evenly and no colour or size rule above changes. The canvas is this
+//     layer's own, so nothing else on the chart is touched, and the faded pixels
+//     are what a chart screenshot copies.
 //   · THE COIL ON THE RIBBON TOO (2026-10-03, "why do ribbons not have any blue
 //     or surge/coil"): Voltick's Path Ribbon draws Volt / Surge / Reversal only;
 //     here the Coil row is not `pathOnly` (vtPathData.ts), so it bands as well.
@@ -103,6 +110,11 @@ import type { PathRow } from './vtPathData'
 import { FLAT_SPAN, PathDraw, REF_MOVE, ROLE_TOKEN, boldOf, hexA, type Geo, type PathPayload } from './pathDraw'
 
 export type { PathPayload }
+
+/** What the studies push: the Path's payload, plus CB Edge's Opacity % (0.1..1; absent = 1). */
+export interface VtPathPayload extends PathPayload {
+  opacity?: number
+}
 
 export const PATH_TYPE = 'cbedge-vt-path'
 export const RIBBON_TYPE = 'cbedge-vt-ribbon'
@@ -348,8 +360,8 @@ class RibbonDraw {
 
 // ── The layer ────────────────────────────────────────────────────────────────
 
-function isPayload(v: unknown): v is PathPayload {
-  return !!v && typeof v === 'object' && Array.isArray((v as PathPayload).rows)
+function isPayload(v: unknown): v is VtPathPayload {
+  return !!v && typeof v === 'object' && Array.isArray((v as VtPathPayload).rows)
 }
 
 /** The bars' open times in seconds, once per bars array (a pan repaints with the same one). */
@@ -421,6 +433,18 @@ class VtPathLayer implements RendererLayerInstance {
       { ...d, ci },
     )
     ctx.restore()
+    // Opacity %: every pixel just drawn keeps (its alpha × opacity). Only alpha
+    // counts under destination-in, so the fill's colour is any opaque token.
+    const opacity = typeof d.opacity === 'number' && Number.isFinite(d.opacity) ? Math.min(1, Math.max(0.1, d.opacity)) : 1
+    if (opacity < 0.999) {
+      ctx.save()
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.globalCompositeOperation = 'destination-in'
+      ctx.globalAlpha = opacity
+      ctx.fillStyle = hexA(tokenRgb('--color-fg'), 1)
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.restore()
+    }
   }
 
   destroy(): void {

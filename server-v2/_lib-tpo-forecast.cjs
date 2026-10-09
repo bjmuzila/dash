@@ -209,14 +209,9 @@ async function ensureAllTables(pool) {
     -- Backfill column for pre-existing tables (Vol-only heatmap history).
     ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL;
     CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
-    CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
     CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);
-    -- Composite index for point-mode baseline queries (open/5/15/30): the
-    -- DISTINCT ON (strike) ... ORDER BY strike, timestamp scans need date+expiry
-    -- filtering with strike/timestamp ordering. Without this the popup's
-    -- option-strike-gex-history?mode=point call took ~25s; with it, sub-second.
-    CREATE INDEX IF NOT EXISTS idx_osgh_lookup
-      ON option_strike_gex_history (date, expiry, strike, timestamp DESC);
+    -- idx_osgh_expiry / idx_osgh_lookup REMOVED 2026-10-09 (0 scans; see the
+    -- note in _lib-db.cjs). Never re-add: this runs without CONCURRENTLY.
 
     CREATE TABLE IF NOT EXISTS trades (
       id SERIAL PRIMARY KEY, timestamp TEXT NOT NULL,

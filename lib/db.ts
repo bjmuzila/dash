@@ -425,14 +425,15 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_dex REAL;
     ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_dex REAL;
     CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
-    CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
+    -- idx_osgh_ts: keep. healthz.cjs's recorder-freshness probe reads max(timestamp).
     CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);
-    -- Composite index for point-mode baseline queries (open/5/15/30): the
-    -- DISTINCT ON (strike) ... ORDER BY strike, timestamp scans need date+expiry
-    -- filtering with strike/timestamp ordering. Without this the popup's
-    -- option-strike-gex-history?mode=point call took ~25s; with it, sub-second.
-    CREATE INDEX IF NOT EXISTS idx_osgh_lookup
-      ON option_strike_gex_history (date, expiry, strike, timestamp DESC);
+    -- REMOVED 2026-10-09: idx_osgh_expiry (expiry) and idx_osgh_lookup
+    -- (date, expiry, strike, timestamp DESC). Every read now filters on symbol
+    -- and uses idx_osgh_symbol_lookup / idx_osgh_symbol_snap (gex-history-writer.js);
+    -- pg_stat_user_indexes showed 0 scans on both over two days of live traffic,
+    -- while every insert (~3M/day) still paid to update them (1.2 GB between them).
+    -- Do NOT re-add them here: this DDL runs on every boot WITHOUT CONCURRENTLY,
+    -- so a missing index would be rebuilt while locking writes on a 12 GB table.
 
     CREATE TABLE IF NOT EXISTS trades (
       id SERIAL PRIMARY KEY, timestamp TEXT NOT NULL,

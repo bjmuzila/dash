@@ -27116,3 +27116,18 @@ Brandon asked for the Voltick Prior Levels lines to run all the way right, with 
   - No colour literals: the default colours are read from tokens.css when the dialog is built.
   - Initial Balance and Overnight H/L are unchanged.
 - **Files:** `cbedge-v3/src/pages/vela/studies/levels.ts`, `studies/index.ts`, `studies/common.ts`.
+
+## 2026-10-09 - Vela Voltick Path / Path Ribbon: Opacity % setting
+
+Brandon asked for a transparency filter in the Voltick Path settings.
+
+- **Opacity %** is a new setting on both Voltick Path and Voltick Path Ribbon: from 10 to 100 in steps of 5, default 100 (unchanged look). Lower fades the whole shape (bubbles or bands, rims and the live dot alike) so the candles show through.
+- **How it works:** once the frame is painted, the layer multiplies every pixel's alpha by the setting (`destination-in`). Overlaps fade evenly, no colour or sizing rule changes, and a chart screenshot copies the faded pixels.
+  - Only the layer's own canvas is touched.
+  - Changing the value repaints; nothing is read again.
+- `pathDraw.ts` (shared with the home board's GEX Candles card) is unchanged. The layer's payload type `VtPathPayload` carries the extra `opacity`.
+- **Checks:**
+  - `tsc` strict is clean on both files.
+  - In Chromium, the fade at 40% took an opaque bead's alpha from 255 to 102 and a half-alpha band's from 128 to 51, with colours kept.
+  - The compositing mode is restored afterwards, and the next frame draws at full strength again, so nothing builds up.
+- **Files:** `cbedge-v3/src/pages/vela/vtPath/vtPathIndicator.ts`, `vtPath/vtPathLayer.ts`.

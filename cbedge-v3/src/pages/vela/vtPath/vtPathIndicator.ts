@@ -34,6 +34,10 @@
 //   Bubble size / Ribbon thickness   CB Edge only: 50–300%, default 100 — scales
 //                every bubble (Path) or band (Ribbon). See vtPathLayer.ts for the
 //                zoomed-out floors that keep both readable at default size.
+//   Opacity      CB Edge only (2026-10-09, Brandon: "needs a transparency filter in
+//                the settings"): 10–100%, default 100 — fades the whole shape,
+//                bubbles / bands, rims and the live dot alike, so the candles show
+//                through. A repaint only, nothing is read again.
 //
 // ── Intraday only (2026-10-07) ───────────────────────────────────────────────
 // Brandon: "path, ribbons, or any of the gex shouldn't be seen at 1d or above".
@@ -56,7 +60,7 @@ import { firstLoadDelay, queuedLoad } from '@/pages/vela/studies/common'
 import { gexBasis, onGexBasis } from '@/pages/vela/gexBasis'
 import { isDailyOrAbove } from '@/pages/vela/timeframes'
 import { buildPathRows, framesFromWalls, loadWallModels, type WallModels, type WallRead } from './vtPathData'
-import { PATH_TYPE, RIBBON_TYPE, registerVtPathLayers, type PathPayload } from './vtPathLayer'
+import { PATH_TYPE, RIBBON_TYPE, registerVtPathLayers, type VtPathPayload } from './vtPathLayer'
 
 export { PATH_TYPE, RIBBON_TYPE }
 
@@ -111,6 +115,19 @@ function inputsSchema(shape: Shape): InputSchema[] {
           ? 'Scales every bubble: 100 is the default, 200 doubles them.'
           : 'Scales every band: 100 is the default, 200 doubles their thickness.',
     },
+    {
+      key: 'opacity',
+      title: 'Opacity %',
+      type: 'int',
+      defval: 100,
+      min: 10,
+      max: 100,
+      step: 5,
+      tooltip:
+        shape === 'path'
+          ? 'How solid the bubbles draw: 100 is as drawn, lower lets the candles show through.'
+          : 'How solid the bands draw: 100 is as drawn, lower lets the candles show through.',
+    },
   ]
 }
 
@@ -123,6 +140,8 @@ interface Settings extends WallRead {
   quiet: boolean
   /** Bubble size / band thickness multiplier, 0.5..3. */
   size: number
+  /** The whole shape's opacity, 0.1..1. */
+  opacity: number
 }
 
 function settingsOf(inputs: Record<string, InputValue>): Settings {
@@ -136,6 +155,7 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
     ci: n(inputs.boldness, 15, 0, 100) / 100,
     quiet: inputs.calm === true,
     size: n(inputs.size, 100, 50, 300) / 100,
+    opacity: n(inputs.opacity, 100, 10, 100) / 100,
   }
 }
 
@@ -259,7 +279,7 @@ class VtPathIndicator implements NativeIndicator {
       frames,
       bars.map((b) => ({ time: Math.floor(b.time / 1000), close: b.close })),
     )
-    const payload: PathPayload | null = rows ? { rows, ci: s.ci, quiet: s.quiet, size: s.size } : null
+    const payload: VtPathPayload | null = rows ? { rows, ci: s.ci, quiet: s.quiet, size: s.size, opacity: s.opacity } : null
     ctx.pushData(payload)
   }
 
