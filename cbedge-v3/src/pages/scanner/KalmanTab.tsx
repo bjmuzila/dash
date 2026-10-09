@@ -82,6 +82,16 @@ import {
   type KfSession,
   type KfSmooth,
 } from '@/pages/scanner/kalman'
+import {
+  BIAS_COOL_MIN,
+  BIAS_SCORE_MIN,
+  BIAS_TREND_HORIZON,
+  BIAS_TREND_ON,
+  runBias,
+  scoreBias,
+  type BiasPoint,
+  type BiasScore,
+} from '@/pages/scanner/kalmanBias'
 
 // ── Request ──────────────────────────────────────────────────────────────────
 
@@ -236,6 +246,11 @@ interface Model {
   dayStarts: number[]
   /** Sessions in the view, oldest first. */
   days: string[]
+  /** The long/short read per point (from the SPOT filter), matched by time. Same index. */
+  bias: Array<BiasPoint | null>
+  /** The newest verdict, and how the view's verdicts played out. */
+  biasNow: BiasPoint | null
+  biasScore: BiasScore
 }
 
 /** How far the cone reaches: a tenth of the LAST session, 10–45 minutes. */
@@ -408,6 +423,9 @@ export default function KalmanTab() {
   const model = useMemo<Model | null>(() => {
     if (!obs.length) return null
     const run = runKalman(obs, series, smooth)
+    // The bias always reads SPOT at this smoothing — see kalmanBias.ts.
+    const biasRun = runBias(obs, smooth)
+    const biasAt = new Map(biasRun.points.map((b) => [b.t, b]))
     // runKalman drops columns before each session's first print; line the
     // spots up with the points it kept by timestamp, not by index.
     const obsAt = new Map(obs.map((o) => [o.t, o]))
@@ -440,6 +458,9 @@ export default function KalmanTab() {
       horizonMin,
       dayStarts,
       days,
+      bias: run.points.map((p) => biasAt.get(p.t) ?? null),
+      biasNow: biasRun.points[biasRun.points.length - 1] ?? null,
+      biasScore: scoreBias(biasRun.points),
     }
   }, [obs, series, smooth, liveEnd])
 
@@ -546,6 +567,8 @@ export default function KalmanTab() {
       {err && <div className="mb-3 text-xs text-down">{err}</div>}
 
       <StatRow model={model} last={last} upd={upd} smooth={smooth} />
+
+      <BiasPanel model={model} />
 
       <div className="relative mt-3 flex flex-col" style={{ height: 420 }}>
         <Panel model={model} bus={bus} paint={paintMain} axisW={AXIS_W} main />
@@ -760,6 +783,132 @@ function RecordedSpotStat({
   return <SpotTile series={series} spot={spot ?? 0} level={level} obsSd={obsSd} liveWord="last" />
 }
 
+// ── Bias ─────────────────────────────────────────────────────────────────────
+// The long / short read. Rules and thresholds live in kalmanBias.ts; this only
+// lays the newest verdict out with the readings behind it.
+
+const SETUP_NAME: Record<BiasPoint['setup'], string> = {
+  aside: 'Stand aside',
+  momentum: 'Momentum',
+  trend: 'Trend',
+  fade: 'Fade',
+  wait: 'No edge',
+}
+const STRENGTH_NAME = ['', 'weak', 'moderate', 'strong'] as const
+
+const BIAS_RULES = [
+  `1 Stand aside — within ${BIAS_COOL_MIN}m of a session start or level break, or on a held print.`,
+  '2 Momentum — residuals ran to one side (6 of the last 8, mean past 0.75σ): go with it. Strongest in −γ. A run against a standing trend is a turn: wait.',
+  `3 Trend — drift ≥ ${BIAS_TREND_ON}σ per ${BIAS_TREND_HORIZON}m: trade its direction on pullbacks to the line. −γ strengthens, +γ weakens.`,
+  '4 Fade — flat trend, +γ, print ≥ 2σ off the line: lean back toward it.',
+  '5 No edge — anything else. −γ with no direction is never faded.',
+  'A new side must hold 2 minutes before the read switches. Reads SPOT at the card’s smoothing, whichever series is drawn.',
+].join('\n')
+
+function sideColor(b: BiasPoint | null): string {
+  if (!b) return T.muted
+  if (b.side === 'long') return T.green
+  if (b.side === 'short') return T.red
+  return b.setup === 'aside' ? T.orange : T.muted
+}
+
+function Chip({ label, value, tone }: { label: string; value: string; tone?: 'up' | 'down' | 'warn' }) {
+  const color = tone === 'up' ? T.green : tone === 'down' ? T.red : tone === 'warn' ? T.orange : T.text
+  return (
+    <span className="flex flex-col gap-0.5 rounded-sm border border-line px-2 py-1">
+      <span className="text-3xs uppercase tracking-widest text-muted">{label}</span>
+      <span className="tabular text-xs" style={{ color }}>
+        {value}
+      </span>
+    </span>
+  )
+}
+
+function BiasPanel({ model }: { model: Model | null }) {
+  const b = model?.biasNow ?? null
+  if (!model || !b) return null
+  const color = sideColor(b)
+  const word = b.side === 'flat' ? (b.setup === 'aside' ? 'STAND ASIDE' : 'NEUTRAL') : b.side === 'long' ? 'LONG' : 'SHORT'
+  const sc = model.biasScore
+  const pct = (h: number, n: number) => (n ? `${Math.round((100 * h) / n)}%` : EM_DASH)
+  const gammaVal =
+    b.gamma === 0
+      ? EM_DASH
+      : b.gammaSrc === 'flip' && b.flip != null
+        ? `${b.gamma > 0 ? '+γ' : '−γ'} · flip ${b.flip.toFixed(0)}`
+        : `${b.gamma > 0 ? '+γ' : '−γ'} · net GEX`
+  const sig = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}σ`
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-line pt-2">
+      <div className="flex min-w-36 flex-col gap-0.5" title={BIAS_RULES}>
+        <span className="text-xs text-muted">Bias · SPX spot</span>
+        <span className="tabular text-xl font-medium leading-none" style={{ color }}>
+          {word}
+        </span>
+        <span className="flex items-center gap-1.5 text-xs text-faint">
+          {b.strength > 0 && (
+            <span className="flex gap-0.5">
+              {[1, 2, 3].map((k) => (
+                <span
+                  key={k}
+                  className="inline-block h-1.5 w-1.5 rounded-full"
+                  style={{ background: k <= b.strength ? color : alpha(T.text, 0.15) }}
+                />
+              ))}
+            </span>
+          )}
+          {SETUP_NAME[b.setup]}
+          {b.strength > 0 ? ` · ${STRENGTH_NAME[b.strength]}` : ''}
+        </span>
+      </div>
+
+      <div className="flex min-w-60 flex-1 flex-col gap-0.5">
+        <span className="text-xs text-fg">{b.reason}</span>
+        <span className="tabular text-xs text-faint">
+          line {b.level.toFixed(2)} · ±2σ {(2 * b.sigma).toFixed(2)} pts · stop no tighter than the band · as of{' '}
+          {etClock(b.t)} ET
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        <Chip label="Regime" value={gammaVal} tone={b.gamma > 0 ? 'up' : b.gamma < 0 ? 'down' : undefined} />
+        <Chip
+          label={`Trend /${BIAS_TREND_HORIZON}m`}
+          value={`${sig(b.trendSig)} · ${b.trendHr >= 0 ? '+' : '−'}${Math.abs(b.trendHr).toFixed(1)}/hr`}
+          tone={Math.abs(b.trendSig) >= BIAS_TREND_ON ? (b.trendSig > 0 ? 'up' : 'down') : undefined}
+        />
+        <Chip
+          label="Residuals"
+          value={b.run > 0 ? `run ↑ ${sig(b.runMean)}` : b.run < 0 ? `run ↓ ${sig(b.runMean)}` : 'scattered'}
+          tone={b.run > 0 ? 'up' : b.run < 0 ? 'down' : undefined}
+        />
+        <Chip label="Stretch" value={b.stretch != null ? sig(b.stretch) : EM_DASH} />
+        <Chip
+          label="Settled"
+          value={b.sinceRestart < BIAS_COOL_MIN ? `${Math.floor(b.sinceRestart)}m · no` : `${Math.floor(b.sinceRestart)}m`}
+          tone={b.sinceRestart < BIAS_COOL_MIN ? 'warn' : undefined}
+        />
+      </div>
+
+      <div
+        className="flex flex-col gap-0.5"
+        title={`Every long/short column in this view, checked against spot ${BIAS_SCORE_MIN} minutes later in the same session. Overlapping minutes are counted, so this is a sanity check, not a backtest.`}
+      >
+        <span className="text-xs text-muted">Calls in view · +{BIAS_SCORE_MIN}m</span>
+        <span className="tabular text-base font-medium leading-none text-fg">
+          {pct(sc.hits, sc.n)}
+          <span className="ml-1.5 text-xs text-faint">
+            {sc.n ? `${sc.avgPts >= 0 ? '+' : '−'}${Math.abs(sc.avgPts).toFixed(1)} pts avg` : 'no calls yet'}
+          </span>
+        </span>
+        <span className="tabular text-xs text-faint">
+          long {pct(sc.long.hits, sc.long.n)} ({sc.long.n}) · short {pct(sc.short.hits, sc.short.n)} ({sc.short.n})
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ── Empty states, legend, sub-panel frame ────────────────────────────────────
 
 function EmptyNote({
@@ -824,6 +973,7 @@ function Legend({ series, horizonMin }: { series: KfSeries; horizonMin: number }
   items.push(
     { label: `Surprise >${KF_SURPRISE_SIGMA}σ`, color: T.orange, shape: 'ring' },
     { label: 'Level break', color: T.orange, shape: 'diamond' },
+    { label: 'Bias ribbon (long / short / aside)', color: alpha(T.green, 0.6), shape: 'block' },
   )
   if (series === 'core') items.push({ label: `${CORE_NAME} strike`, color: alpha(LEVEL_COLORS.cb, 0.45), shape: 'dash' })
   if (ON_PRICE(series)) items.push({ label: 'Spot', color: alpha(T.text, 0.4), shape: 'line' })
@@ -1645,6 +1795,29 @@ const paintMain: Painter = (canvas, w, h, m, bus, axisW) => {
   ctx.fillText(trendTick(tMax), plotR + 6, trendTop + 6)
   ctx.fillText(trendTick(-tMax), plotR + 6, trendTop + trendH - 6)
 
+  // ── Bias ribbon — in the gap between the panes, one slot per column ────────
+  {
+    const ry = PAD_T + mainH + 3
+    const rh = PANE_GAP - 4
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(PAD_L, ry, plotW, rh)
+    ctx.clip()
+    for (let i = d0; i <= d1; i++) {
+      const b = m.bias[i]
+      if (!b) continue
+      let fill: string | null = null
+      if (b.side === 'long') fill = tokenHexAlpha('--color-up', 0.2 + 0.25 * b.strength)
+      else if (b.side === 'short') fill = tokenHexAlpha('--color-down', 0.2 + 0.25 * b.strength)
+      else if (b.setup === 'aside') fill = tokenHexAlpha('--color-warn', 0.35)
+      if (!fill) continue
+      const xa = x(i - 0.5)
+      ctx.fillStyle = fill
+      ctx.fillRect(xa, ry, Math.max(1, x(i + 0.5) - xa), rh)
+    }
+    ctx.restore()
+  }
+
   // ── Time axis ──────────────────────────────────────────────────────────────
   const axisY = h - X_AXIS_H / 2
   ctx.textAlign = 'center'
@@ -1700,6 +1873,12 @@ const paintMain: Painter = (canvas, w, h, m, bus, axisW) => {
     if (ck != null) lines.push(`strike   ${ck}${cn != null ? ` (${fmtB(cn)})` : ''}`)
   }
   if (ON_PRICE(s) && spotH != null) lines.push(`spot     ${spotH.toFixed(2)}`)
+  const hb = m.bias[hover]
+  if (hb) {
+    const word = hb.side === 'flat' ? (hb.setup === 'aside' ? 'ASIDE' : 'NEUTRAL') : hb.side.toUpperCase()
+    const dots = hb.strength ? ` ${'●'.repeat(hb.strength)}${'○'.repeat(3 - hb.strength)}` : ''
+    lines.push(`bias     ${word}${dots} · ${SETUP_NAME[hb.setup].toLowerCase()}`)
+  }
   if (kindLine[hp.kind]) lines.push(kindLine[hp.kind])
   ctx.font = `${TIP_PX}px ${mono}`
   let boxW = 0

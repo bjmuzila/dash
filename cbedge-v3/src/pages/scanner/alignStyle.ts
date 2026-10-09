@@ -64,3 +64,16 @@ export function pillStyle(color: string): CSSProperties {
 /** Chrome labels — v2's light-blue `lbl`, as every other scanner tab paints it. */
 export const LABEL = V2.green
 export const DIM = alpha(T.text, 0.45)
+
+/**
+ * Grader colours (alignGrade.ts). A and B are both "touched", so they share the
+ * positive family; C is the chain's wall yellow (partial), D the scanner's
+ * neutral, F the scanner's negative.
+ */
+export const GRADE_COLOR: Record<'A' | 'B' | 'C' | 'D' | 'F', string> = {
+  A: V2.up,
+  B: V2.cyan,
+  C: LEVEL_COLORS.cb,
+  D: V2.neutral,
+  F: V2.red,
+}

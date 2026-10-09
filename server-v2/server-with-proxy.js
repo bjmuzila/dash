@@ -501,6 +501,7 @@ function _alNewState(date) {
     modes,
     strikes: new Map(),    // symbol -> Set(strike) seen today
     latest: new Map(),     // symbol -> { t, spot, cells: [{ expiry, strike, net, spot }] }
+    px: new Map(),         // symbol -> [[tMs, spot], …] one per sweep — the grader's price path
     view: null,            // committed + provisional, what the route serves
     agg: new Map(),        // symbol -> rows from scanner_variants (all ex-0DTE)
     hot: new Set(),
@@ -558,6 +559,13 @@ function _alIngest(target, rows, cow) {
     for (const c of cells) set.add(c.strike);
     const prev = target.latest.get(sym);
     if (!prev || t >= prev.t) target.latest.set(sym, { t, spot, cells });
+    if (spot > 0) {
+      let px = target.px.get(sym);
+      if (cow && px && !copied.has(`p|${sym}`)) { px = px.slice(); target.px.set(sym, px); copied.add(`p|${sym}`); }
+      if (!px) { px = []; target.px.set(sym, px); }
+      const lastPx = px[px.length - 1];
+      if (!lastPx || t > lastPx[0]) px.push([t, Math.round(spot * 100) / 100]);
+    }
 
     const byExp = new Map();
     for (const c of cells) {
@@ -584,7 +592,7 @@ function _alIngest(target, rows, cow) {
 function _alClone(st) {
   const modes = {};
   for (const m of _AL_MODES) modes[m] = { segs: new Map(st.modes[m].segs), last: new Map(st.modes[m].last) };
-  return { modes, strikes: new Map(st.strikes), latest: new Map(st.latest) };
+  return { modes, strikes: new Map(st.strikes), latest: new Map(st.latest), px: new Map(st.px) };
 }
 
 const _alRowsSql = `
@@ -722,6 +730,8 @@ function _alPayload(st, mode, today) {
       expiries,
       walls,
       all,
+      // Spot at every sweep — what the Align grader scores each signal against.
+      px: v.px.get(symbol) || [],
     });
   }
   symbols.sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));

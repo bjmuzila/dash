@@ -29,6 +29,7 @@ import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { T, V2, V2W, tokenHex, tokenHexAlpha } from '@/design/theme'
 import { readableError, useQuery } from '@/data/api'
 import { sizeCanvas, useCanvasRenderer } from '@/board/chart-render'
+import { GradePill } from '@/pages/scanner/AlignScorecard'
 import { EM_DASH, fmtB } from '@/pages/scanner/format'
 import {
   ALIGN_POLL_MS,
@@ -339,7 +340,7 @@ export default function AlignReplay({
             )}
           </Panel>
 
-          <Panel title="Today's events">
+          <Panel title="Events · graded">
             {(!row || row.events.length === 0) && (
               <div className="text-xs" style={{ color: DIM }}>
                 No alignment changes yet.
@@ -348,11 +349,14 @@ export default function AlignReplay({
             {row?.events
               .slice()
               .reverse()
-              .map((e, i) => (
+              .map((e, i) => {
+                // LOCK / PENDING events are signals — show how each one played out.
+                const sig = row.signals.find((g) => g.t0 === e.t && g.kind === e.kind)
+                return (
                 <div
                   key={`${e.t}-${i}`}
                   className="grid items-center gap-2 border-t border-line/50 py-1.5 text-xs"
-                  style={{ gridTemplateColumns: '44px 72px minmax(0, 1fr)' }}
+                  style={{ gridTemplateColumns: '44px 72px minmax(0, 1fr) 32px' }}
                 >
                   <span className="tabular" style={{ color: DIM }}>
                     {fmtEt(e.t)}
@@ -364,8 +368,10 @@ export default function AlignReplay({
                     {e.kind}
                   </span>
                   <span className="text-fg">{e.text}</span>
+                  <span className="justify-self-end">{sig ? <GradePill s={sig} /> : null}</span>
                 </div>
-              ))}
+                )
+              })}
           </Panel>
         </div>
       </div>

@@ -38,6 +38,8 @@
 //      between the call and the put side when the two are close in size.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { gradeSignals, type Signal } from '@/pages/scanner/alignGrade'
+
 export type AlignMode = 'abs' | 'pos' | 'neg'
 export type AlignState = 'LOCKED' | 'PENDING' | 'FORMING' | 'SCATTERED'
 
@@ -80,6 +82,8 @@ export interface AlignSymbolRaw {
   all?: AlignAllWall | null
   /** On the MAIN (hot) lane of the scanner roster — the Align · Main tab's universe. */
   hot?: boolean
+  /** Spot at every sweep, [tMs, spot] — what the grader scores signals against. */
+  px?: Array<[number, number]>
 }
 
 export interface AlignResponse {
@@ -445,6 +449,22 @@ export interface AlignRow {
   /** Distance, dominance and (if asked) ALL ex-0DTE filters all pass. */
   passes: boolean
   frontIsZeroDte: boolean
+  /** Every LOCK / PENDING today, graded on what price did next (alignGrade.ts). */
+  signals: Signal[]
+}
+
+/** Is this session over? Past days are; today is once it is 16:00 ET. */
+export function sessionFinal(date: string | undefined): boolean {
+  const today = etToday()
+  if (!date || date > today) return false
+  if (date < today) return true
+  const hm = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date())
+  return Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5)) >= 16 * 60
 }
 
 export function buildRow(raw: AlignSymbolRaw, settings: AlignSettings, date: string | undefined, now: number): AlignRow {
@@ -507,6 +527,15 @@ export function buildRow(raw: AlignSymbolRaw, settings: AlignSettings, date: str
     allOn,
     passes: verdict.state === 'SCATTERED' ? !settings.requireAll : distOk && domOk && allOk,
     frontIsZeroDte: frontIsZeroDte(sym, date),
+    signals: gradeSignals({
+      symbol: sym.symbol,
+      runs,
+      px: raw.px ?? [],
+      step: sym.step,
+      final: sessionFinal(date),
+      allSegs: all?.segs ?? null,
+      tolAbs: tolAbs(sym.step, settings.tol),
+    }),
   }
 }
 

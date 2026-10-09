@@ -53,6 +53,8 @@ import {
 } from '@/pages/scanner/align'
 import { DIM, EVENT_COLOR, LABEL, STATE_COLOR, pillStyle } from '@/pages/scanner/alignStyle'
 import AlignReplay from '@/pages/scanner/AlignReplay'
+import AlignScorecard, { GradePill } from '@/pages/scanner/AlignScorecard'
+import type { Signal } from '@/pages/scanner/alignGrade'
 import { SCANNER_MAIN } from '@/data/scannerTickers'
 
 /** Fallback universe for Align · Main when the server sends no `hot` flag. */
@@ -118,7 +120,7 @@ export function useAlignSettings(): [AlignSettings, (patch: Partial<AlignSetting
 // ── Filters ──────────────────────────────────────────────────────────────────
 
 type Filter = 'active' | AlignState | 'all'
-type View = 'board' | 'stacks'
+type View = 'board' | 'stacks' | 'grades'
 
 const FILTERS: Array<{ id: Filter; label: string }> = [
   { id: 'active', label: 'Active' },
@@ -273,6 +275,16 @@ function AlignBoard({
     return [...mine, ...stubs]
   }, [data, main])
 
+  // The Grades view's universe filter — the same rule as above, without stubs.
+  const pickUniverse = useCallback(
+    (list: AlignSymbolRaw[]) => {
+      if (!main) return list
+      const flagged = list.some((s) => s.hot !== undefined)
+      return flagged ? list.filter((s) => s.hot) : list.filter((s) => MAIN_SET.has(s.symbol))
+    },
+    [main],
+  )
+
   const allRows = useMemo(
     () => sortRows(symbols.map((s) => buildRow(s, settings, date, now))),
     // `now` moves every render; the minute tick above is what refreshes "held".
@@ -376,13 +388,22 @@ function AlignBoard({
         </div>
       )}
 
-      {view === 'board' ? (
+      {view === 'grades' ? (
+        <AlignScorecard
+          settings={settings}
+          dates={datesResp?.dates ?? []}
+          live={day ? undefined : data}
+          liveDate={day ? undefined : date}
+          pick={pickUniverse}
+          onOpen={onOpen}
+        />
+      ) : view === 'board' ? (
         <BoardTable rows={rows} nCols={nCols} zeroDteFront={zeroDteFront} settings={settings} now={now} date={date} onOpen={onOpen} />
       ) : (
         <Stacks rows={rows} nCols={nCols} zeroDteFront={zeroDteFront} now={now} date={date} onOpen={onOpen} />
       )}
 
-      <Tape events={tape} date={date} onOpen={onOpen} />
+      {view !== 'grades' && <Tape events={tape} date={date} onOpen={onOpen} />}
     </Card>
   )
 }
@@ -439,6 +460,7 @@ function Toolbar({
           options={[
             { value: 'board', label: 'Board' },
             { value: 'stacks', label: 'Stacks' },
+            { value: 'grades', label: 'Grades', title: 'How the signals played out — graded across saved sessions' },
           ]}
           value={view}
           onChange={setView}
@@ -630,6 +652,9 @@ function BoardTable({
             </th>
             <th className={`${TH} text-center`}>Align</th>
             <th className={`${TH} text-left`}>State</th>
+            <th className={`${TH} text-center`} title="The latest LOCK / PENDING today, graded on what price did next. Hover for details.">
+              Grade
+            </th>
             <th className={`${TH} text-right`}>Held</th>
             <th className={`${TH} text-right`} title="Σ net GEX of the expiries on the wall">
               Wall $GEX
@@ -642,7 +667,7 @@ function BoardTable({
         <tbody>
           {rows.length === 0 && (
             <tr>
-              <td colSpan={10 + nCols} className="px-2 py-6 text-center text-xs" style={{ color: DIM }}>
+              <td colSpan={11 + nCols} className="px-2 py-6 text-center text-xs" style={{ color: DIM }}>
                 No tickers loaded yet.
               </td>
             </tr>
@@ -702,6 +727,9 @@ function BoardTable({
               </td>
               <td className={`${TD} text-left`}>
                 <StateBadge state={r.verdict.state} />
+              </td>
+              <td className={`${TD} text-center`}>
+                {r.signals.length ? <GradePill s={r.signals[r.signals.length - 1] as Signal} /> : EM_DASH}
               </td>
               <td className={`${TD} text-right`}>
                 {r.verdict.state === 'SCATTERED' ? EM_DASH : fmtHeld(now - r.since)}
