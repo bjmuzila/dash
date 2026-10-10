@@ -34,7 +34,6 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { getFlowGexHistoryWindow } = require('./state/flow-gex-history');
-const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = require('./state/ticker-wall-recorder');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
 const { etEpochMs } = require('./computation/utils');
@@ -321,9 +320,11 @@ const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEn
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
 // The four (expiry_scope × basis) level variants /proxy/walls can serve.
 const scannerVariants = require('./scanner-variants');
-const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
-  getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
-const { startForwardScanner, runForwardSweep, getForward } = require('./forward-scanner-recorder');
+// walls-reach.js (Reach Rank + proximity alerts) is no longer wired here: both
+// jobs were switched off 2026-09-10 and its routes + the /proxy/walls rank
+// decoration were removed 2026-10-10. daily-grades-recorder.js still uses its
+// read side directly. forward-scanner-recorder.js retired 2026-10-10 →
+// Vanilla/retired-2026-10-10/.
 const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getPickFlow: getGexChangeTopPickFlow, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults, getStudy: getGexChangeTopStudy, getCalibration: getGexChangeTopCalibration, fitProjRule: fitGexChangeTopRule, getRuleState: getGexChangeTopRuleState, storeRule: storeGexChangeTopRule } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
@@ -464,10 +465,9 @@ const RETIRED_NEXT_PAGES = {
   '/logs': '/home',
 };
 const PORT = parseInt(process.env.PORT || '3001', 10);
-// Recorders whose output nothing reads any more (2026-10-09 audit): forward
-// scanner, ticker-wall, momentum-bias, preview / home / mult-greek snapshots.
-// Off by default; LEGACY_RECORDERS=1 in .env.local starts them again.
-const LEGACY_RECORDERS = process.env.LEGACY_RECORDERS === '1';
+// LEGACY_RECORDERS is gone (2026-10-10): the recorders it gated — forward
+// scanner, ticker-wall, momentum-bias, preview / home / mult-greek snapshots —
+// had no readers and were moved to Vanilla/retired-2026-10-10/.
 const DEV = process.env.NODE_ENV !== 'production';
 
 // Maintenance mode: when ON, the Next middleware serves /maintenance to every
@@ -1323,25 +1323,7 @@ async function handleProxyRest(req, res) {
     return true;
   }
 
-  // /proxy/wall-history?ticker=NDX&ages=5,15,30,60
-  // Server-recorded call/put GEX wall for NDX/SPY/QQQ (ticker-wall-recorder.js),
-  // shaped for the Walls & Flows tab: { ages:[...], windows:[{age,callWall,putWall}] }.
-  // Unlike /proxy/gex-history (SPX only, per-strike), this reads pre-computed
-  // wall snapshots so it survives regardless of whether a browser is open.
-  if (pathname === '/proxy/wall-history') {
-    const wallUrl = new URL(req.url || '/', 'http://localhost');
-    const ticker = (wallUrl.searchParams.get('ticker') || '').trim().toUpperCase();
-    const ages = (wallUrl.searchParams.get('ages') || '5,15,30,60')
-      .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
-    if (!ticker || !ages.length) {
-      sendJson(res, 200, { ages, windows: [] });
-      return true;
-    }
-    getTickerWallHistory(ticker, ages)
-      .then((result) => sendJson(res, 200, result))
-      .catch((e) => sendJson(res, 500, { error: 'wall-history failed', detail: String(e?.message || e) }));
-    return true;
-  }
+  // /proxy/wall-history RETIRED 2026-10-10 with state/ticker-wall-recorder.js (no caller).
 
   // /proxy/flow-history?date=YYYY-MM-DD&limit=2000
   // Returns today's persisted flow tape as FlowOrder[] (oldest-first).
@@ -4665,10 +4647,9 @@ async function main() {
       // written value forward per level type; `open` holds the 09:29 baseline
       // so the client can show the session delta without re-reading the log.
       //
-      // The day summary is then decorated by walls-reach.attachRank(), which
-      // adds ATR distance / bucket / out-of-sample reach score per level plus
-      // the `rank` block the page's ladder and ranked list draw from. It never
-      // throws: if the calibration snapshot is missing the walls still render.
+      // (Until 2026-10-10 the universe view was also decorated by
+      // walls-reach.attachRank(). Reach Rank stopped recording 2026-09-10, so
+      // that cost two queries per call and added nothing — removed.)
       //
       // GET /proxy/walls?date=…&symbol=SPX&series=1
       //   The 5-MINUTE HISTORY the change-only log was distilled from — the raw
@@ -4745,139 +4726,15 @@ async function main() {
               scope: wallVariant.scope,
               basis: wallVariant.basis,
             });
-            // Only the universe view carries a ranking — the per-symbol view is
-            // a log, not a leaderboard.
-            const body = (!symbol && out?.ok) ? await attachRank(out) : out;
-            sendJson(res, body.ok ? 200 : 503, body);
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // ── Reach study behind the ranking ────────────────────────────────────
-      // GET /proxy/walls-reach?date=…            → global ladder + per-symbol grid
-      // GET /proxy/walls-reach?date=…&symbol=SPX → that symbol's curve vs global
-      if (pathname === '/proxy/walls-reach' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const out = await getReach({
-              date: u.searchParams.get('date') || undefined,
-              symbol: u.searchParams.get('symbol') || undefined,
-            });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;
       }
-      // Manual backfill / recalibration:
-      //   POST /proxy/walls-reach-run { from?, to?, symbols?, rebuild?, calibrateOnly?, asOf? }
-      // A full history replay is long-running — this responds when it finishes,
-      // so drive it from the VPS rather than a browser tab.
-      if (pathname === '/proxy/walls-reach-run' && req.method === 'POST') {
-        let reachBody = '';
-        req.on('data', (c) => { reachBody += c; if (reachBody.length > 1e5) req.destroy(); });
-        req.on('end', () => {
-          let opts = {};
-          try { opts = JSON.parse(reachBody || '{}'); } catch {}
-          (async () => {
-            const backfill = opts.calibrateOnly === true ? null : await runReachBackfill({
-              from: opts.from || null,
-              to: opts.to || null,
-              symbols: Array.isArray(opts.symbols) && opts.symbols.length ? opts.symbols : null,
-              rebuild: opts.rebuild === true,
-            });
-            const calibration = await runCalibration({ asOf: opts.asOf || null });
-            return { backfill, calibration };
-          })()
-            .then((r) => sendJson(res, 200, { ok: true, result: r }))
-            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        });
-        return;
-      }
-      // Live watchlist: GET /proxy/walls-watch[?date=&maxAtr=]
-      //   → { levels:[...] } — every level currently within maxAtr of spot,
-      //     nearest first, with today's attempt history and whether price is
-      //     closing on it. Polled by the Walls tab; cheap enough for 30s.
-      //   Distance is the claim. Whether the level HOLDS is not — see the
-      //   control-arm note in walls-reach.js.
-      if (pathname === '/proxy/walls-watch' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const maxAtr = Number(u.searchParams.get('maxAtr'));
-            const out = await getWatch({
-              date: u.searchParams.get('date') || undefined,
-              maxAtr: Number.isFinite(maxAtr) && maxAtr > 0 ? maxAtr : undefined,
-            });
-            sendJson(res, out.ok ? 200 : 503, out);
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Forward walls: GET /proxy/walls-forward[?date=&symbol=]
-      //   The SAME wall calculation on the next unexpired contract, from its own
-      //   table. Never mixed into scanner_snapshots — see the header note in
-      //   forward-scanner-recorder.js for why that would corrupt three readers.
-      if (pathname === '/proxy/walls-forward' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const out = await getForward({
-              date: u.searchParams.get('date') || undefined,
-              symbol: u.searchParams.get('symbol') || undefined,
-            });
-            sendJson(res, out.ok ? 200 : 503, out);
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Manual forward sweep: POST /proxy/walls-forward-run { force?, symbols? }
-      if (pathname === '/proxy/walls-forward-run' && req.method === 'POST') {
-        let fb = '';
-        req.on('data', (c) => { fb += c; if (fb.length > 1e5) req.destroy(); });
-        req.on('end', () => {
-          let o = {};
-          try { o = JSON.parse(fb || '{}'); } catch {}
-          runForwardSweep({
-            force: o.force === true,
-            symbols: Array.isArray(o.symbols) && o.symbols.length ? o.symbols : null,
-          })
-            .then((r) => sendJson(res, 200, { ok: true, result: r }))
-            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        });
-        return;
-      }
-      // Alert feed: GET /proxy/walls-alerts[?date=&limit=]
-      //   → { alerts:[...] } newest first. Written by the 5m watch sweep when a
-      //     level comes inside 0.25x ATR while closing. Rendered on the Walls
-      //     tab — there is deliberately no email/push channel for these.
-      if (pathname === '/proxy/walls-alerts' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const out = await getAlerts({
-              date: u.searchParams.get('date') || undefined,
-              limit: Number(u.searchParams.get('limit')) || undefined,
-            });
-            sendJson(res, out.ok ? 200 : 503, out);
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Manual alert sweep: POST /proxy/walls-watch-run { force?: true }
-      // force bypasses the RTH gate so the wiring can be tested off-hours.
-      if (pathname === '/proxy/walls-watch-run' && req.method === 'POST') {
-        let wb = '';
-        req.on('data', (c) => { wb += c; if (wb.length > 1e5) req.destroy(); });
-        req.on('end', () => {
-          let o = {};
-          try { o = JSON.parse(wb || '{}'); } catch {}
-          runWatchAlerts({ force: o.force === true, dryRun: o.dryRun === true })
-            .then((r) => sendJson(res, 200, { ok: true, result: r }))
-            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        });
-        return;
-      }
+      // /proxy/walls-reach(-run), /proxy/walls-watch(-run), /proxy/walls-alerts and
+      // /proxy/walls-forward(-run) RETIRED 2026-10-10: their recorders were off and
+      // nothing called them. The tables (wall_reach, wall_calibration, wall_atr,
+      // wall_alerts, scanner_forward) are left in place.
       // Manual slot fire: POST /proxy/walls-run  { slot?: 0-26, force?: true }
       // force bypasses the trading-day gate; slot lets you re-run / backfill a
       // specific capture (writes are idempotent on (date,symbol,level,slot)).
@@ -5349,56 +5206,7 @@ async function main() {
         })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
-      // Fire a single /preview delayed-snapshot now (ignores the RTH gate on
-      // force — e.g. seeding the weekend page from Friday's last-known chain).
-      // POST /proxy/preview-snapshot?force=1
-      if (pathname === '/proxy/preview-snapshot' && req.method === 'POST') {
-        const { collectOnce } = require('./preview-snapshot-recorder');
-        const force = /[?&]force=1\b/.test(req.url || '');
-        const base = `http://localhost:${PORT}`;
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        (async () => {
-          let r = await collectOnce(base, { force });
-          // On force, an empty chain usually means the feed isn't subscribed
-          // (outside RTH/weekend). Reconnect to rebuild it, wait, retry once.
-          if (force && r && r.ok === false && r.error === 'empty chain'
-              && proxy && typeof proxy.reconnect === 'function') {
-            console.log('[preview-snapshot] empty chain on force — reconnecting feed and retrying');
-            try { await proxy.reconnect(); } catch (e) { console.log('[preview-snapshot] reconnect failed:', e?.message || e); }
-            for (let i = 0; i < 8; i++) {
-              await sleep(2000);
-              r = await collectOnce(base, { force });
-              if (!r || r.ok !== false || r.error !== 'empty chain') break;
-            }
-          }
-          sendJson(res, 200, r ?? { ok: false, error: 'no result' });
-        })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-      // Fire a single /home full-chain static snapshot now (ignores the RTH
-      // gate on force — e.g. seeding the weekend /home from Friday's close).
-      // POST /proxy/home-snapshot?force=1
-      if (pathname === '/proxy/home-snapshot' && req.method === 'POST') {
-        const { collectOnce } = require('./home-snapshot-recorder');
-        const force = /[?&]force=1\b/.test(req.url || '');
-        const base = `http://localhost:${PORT}`;
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        (async () => {
-          let r = await collectOnce(base, { force });
-          if (force && r && r.ok === false && r.error === 'empty chain'
-              && proxy && typeof proxy.reconnect === 'function') {
-            console.log('[home-snapshot] empty chain on force — reconnecting feed and retrying');
-            try { await proxy.reconnect(); } catch (e) { console.log('[home-snapshot] reconnect failed:', e?.message || e); }
-            for (let i = 0; i < 8; i++) {
-              await sleep(2000);
-              r = await collectOnce(base, { force });
-              if (!r || r.ok !== false || r.error !== 'empty chain') break;
-            }
-          }
-          sendJson(res, 200, r ?? { ok: false, error: 'no result' });
-        })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
+      // /proxy/preview-snapshot + /proxy/home-snapshot RETIRED 2026-10-10 with their recorders.
       // Send the morning budget briefing email right now (bypasses the 08:00 ET
       // gate). POST /proxy/budget-email-run
       // Fire-and-forget: the run drives a headless browser and takes ~40s, which
@@ -5411,17 +5219,7 @@ async function main() {
           .catch((e) => console.error('[budget-email] manual run failed:', e?.message || e));
         return;
       }
-      // Fire a single /mult-greek static snapshot now (ignores the RTH gate on
-      // force). POST /proxy/mult-greek-snapshot?force=1
-      if (pathname === '/proxy/mult-greek-snapshot' && req.method === 'POST') {
-        const { collectOnce } = require('./mult-greek-snapshot-recorder');
-        const force = /[?&]force=1\b/.test(req.url || '');
-        const base = `http://localhost:${PORT}`;
-        collectOnce(base, { force })
-          .then((r) => sendJson(res, 200, r ?? { ok: false, error: 'no result' }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
+      // /proxy/mult-greek-snapshot RETIRED 2026-10-10 with its recorder.
       // Generate the pre-market AI summary now (ignores the 8am schedule).
       // POST /proxy/premarket-summary-run
       if (pathname === '/proxy/premarket-summary-run' && req.method === 'POST') {
@@ -6140,26 +5938,9 @@ async function main() {
     // time; nothing was copying it into walls_log. Do not disable this again
     // without checking /v3/level-log first.
     if (runJob('walls')) startWallsRecorder();
-    // Reach Rank: the distance model layered on top of Walls. Nightly at 16:45
-    // ET it replays the session into wall_reach (how far each level sat in ATR
-    // units, and whether price got there) and re-snapshots wall_calibration
-    // as_of TOMORROW — so tomorrow's live ranking scores every level against a
-    // curve fitted only on sessions it has never seen. Feeds /proxy/walls-reach
-    // and decorates /proxy/walls.
-    // DISABLED 2026-09-10 — Reach Rank only. The recorder above is back on as of
-    // 2026-09-11; this stays off deliberately. /v3/level-log does not read
-    // wall_reach, and /proxy/walls-reach still serves what is already in it.
-    // startWallsReach();
-    // Proximity alerts: every 5m during RTH, anything that just came inside
-    // 0.25x ATR of a level WHILE CLOSING is written to wall_alerts and shows up
-    // in the Walls tab's alert feed. No email, no push — on-page only.
-    // DISABLED 2026-09-10 — proximity alerts only. Independent of the recorder
-    // above, which is back on as of 2026-09-11. No new wall_alerts rows.
-    // startWallsWatch();
-    // Forward walls: the next unexpired contract, swept pre-open and post-close
-    // into its own table so the 0DTE stack's one-expiry-per-session invariant
-    // is never violated.
-    if (LEGACY_RECORDERS && runJob('legacy')) startForwardScanner(); // no reader: /proxy/walls-forward has no caller
+    // Reach Rank, proximity alerts (walls-reach.js) and the forward-walls
+    // sweep were switched off 2026-09-10; their start lines and routes were
+    // removed 2026-10-10. See the note at the walls-reach require above.
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.
@@ -6181,11 +5962,6 @@ async function main() {
         ? proxy.getStrikeGrowthSnapshot(sym)
         : Promise.resolve(null)),
     });
-    // NDX/SPY/QQQ 0DTE call/put wall recorder: writes one row per ticker every
-    // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side
-    // instead of depending on a browser tab staying open. NDX runs 24/7;
-    // SPY/QQQ only tick during RTH. Feeds /proxy/wall-history.
-    if (LEGACY_RECORDERS && runJob('legacy')) startTickerWallRecorder(); // no reader: ChainStatsBar is imported nowhere
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
     if (runJob('greeks-ts')) startGreeksTsWriter(PORT);
@@ -6206,15 +5982,9 @@ async function main() {
     // summary + screenshots of /owner/budget (Overview + Prop). Force a send
     // any time via POST /proxy/budget-email-run.
     if (runJob('budget-email')) require('./budget-email').startBudgetEmail(PORT);
-    // Overnight ES gap tracker: DISABLED — CPU cost not worth it (5-min RTH cron).
-    // Re-enable by uncommenting: require('./es-gap-tracker').startEsGapTracker(PORT);
-    // In-process ICT setup recorder: every 5m during RTH detects every live ICT
-    // setup (same analyzeICT the /ict page renders), records new ones, and grades
-    // pending ones by follow-through → /api/ict-setups.
-    // DISABLED 2026-09-10 — ICT Results tab removed from the owner Results page.
-    // No new ict_setups rows and no grading pass; /api/ict-setups still serves
-    // history. NOTE: this also freezes the /ict page recap.
-    // require('./ict-setup-tracker').startIctSetupTracker(PORT);
+    // ES gap tracker and ICT setup tracker: off since 2026-09, files moved to
+    // Vanilla/retired-2026-10-10/ on 2026-10-10. /api/es-gap and /api/ict-setups
+    // still serve whatever rows they already have.
     // EOD IB results: daily at 16:30 ET, computes the finished session's Initial
     // Balance + 14-rule scoreboard (ES+NQ) from the persisted 5m candles →
     // ib_daily_results, read by the IB Stats tab's Daily Results table.
@@ -6225,10 +5995,6 @@ async function main() {
     // Chart-read indexes, built CONCURRENTLY two minutes after boot, plus
     // pg_stat_statements when Postgres preloads it (state/perf-indexes.js).
     if (runJob('perf-indexes')) require('./state/perf-indexes').startPerfIndexes();
-    // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
-    // by the feed in _flushEsCandles) via follow-through every 5m → the
-    // momentum_bias_signals table. Read via /api/momentum-bias.
-    if (LEGACY_RECORDERS && runJob('legacy')) require('./momentum-bias-tracker').startMomentumBiasGrader(); // no reader
     // GEX/CB actionable signal engine for the ES Candles page: every few seconds
     // during the futures session it turns the live heatmap levels (flip cross,
     // Call/Put wall reject+break, CB reaction, level confluence) into long/short
@@ -6248,19 +6014,6 @@ async function main() {
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.
     if (runJob('ref-levels')) require('./ref-levels-recorder').startRefLevelsRecorder(PORT);
-    // Delayed preview feed for signed-up-but-unpaid users (/preview page):
-    // every 30m during RTH, snapshots spot + call/put wall + gamma flip from
-    // the same /api/gex the paid dashboard reads → preview_snapshots.
-    if (LEGACY_RECORDERS) require('./preview-snapshot-recorder').startPreviewSnapshotRecorder(PORT); // its POST target /api/preview does not exist
-    // Delayed FULL-chain feed for /home in "delayed" mode (unpaid signed-in
-    // users): every 30m during RTH, snapshots the entire hot /proxy/gex
-    // payload → home_static_snapshots, so unpaid /home renders the same chart
-    // component as paid users, just frozen.
-    if (LEGACY_RECORDERS) require('./home-snapshot-recorder').startHomeSnapshotRecorder(PORT); // /home and /app/home redirect into v3
-    // Delayed feed for /mult-greek in "delayed" mode (unpaid signed-in users):
-    // every 30m during RTH, snapshots the SPX/SPY/QQQ chain at one shared
-    // near-dated expiry → mult_greek_static_snapshots.
-    if (LEGACY_RECORDERS) require('./mult-greek-snapshot-recorder').startMultGreekSnapshotRecorder(PORT); // /mult-greek retired 2026-09-14
     // Per-strike NET GEX history (SPX/SPY/QQQ/IWM, 4 closest expiries) every 60s
     // during RTH → mult_greek_gex_ring/open, backing the /mult-greek click card's
     // 15m/30m/open change. Guarded — never crash startup if it fails to load.

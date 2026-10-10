@@ -28,8 +28,6 @@ const { writeGexSnapshot } = require('./gex-history-writer');
 const { writeFlowTape } = require('./state/flow-history-writer');
 const { rehydrateAccumulator } = require('./state/flow-gex-rehydrate');
 const { writeEsCandles, writeNqCandles } = require('./state/es-candle-writer');
-const { recordSignals } = require('./state/momentum-bias-writer');
-const { getMomentumBiasIndex } = require('../lib/momentumBias.js');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
@@ -69,8 +67,6 @@ const RECOMPUTE_MS_OFFHOURS = Number(process.env.RECOMPUTE_MS_OFFHOURS || 15000)
 // session's per-strike dayVolume + OI are stale; we force a re-pull rather than
 // depend on dxFeed reliably pushing the reset (it does so only sometimes).
 const SESSION_ROLL_HOUR_ET = Number(process.env.SESSION_ROLL_HOUR_ET || 18);
-// Writers nothing reads any more (2026-10-09 audit). Off unless LEGACY_RECORDERS=1.
-const LEGACY_RECORDERS = process.env.LEGACY_RECORDERS === '1';
 // Full-window candle rewrite cadence per stream (see _candleRowsToPersist).
 const CANDLE_HEAL_MS = Number(process.env.CANDLE_HEAL_MS || 10 * 60_000);
 const SESSION_ROLL_CHECK_MS = Number(process.env.SESSION_ROLL_CHECK_MS || 60000);
@@ -4061,44 +4057,9 @@ class TastytradeProxy {
       }
     }
 
-    // ── Momentum Bias TP/reversal signals (recorded for grading) ──────────
-    // Compute the bias index over the rolling candle array and record any TP
-    // trigger that fired on a CLOSED bar. The last bar is still forming and its
-    // crossunder repaints, so it is never recorded (same lesson as EM weekly
-    // scoring). Idempotent on signal_key, so re-scanning the last few closed
-    // bars each flush is harmless and cheap. Display is computed client-side
-    // from the same lib/momentumBias module — the WS payload is left untouched.
-    // Off by default since 2026-10-09: nothing reads momentum_bias_signals
-    // (/api/momentum-bias has no client), and this ran the bias index over the
-    // whole 600-bar window on every flush. LEGACY_RECORDERS=1 brings it back.
-    if (LEGACY_RECORDERS && rows.length > 40) {
-      try {
-        const bias = getMomentumBiasIndex(
-          rows.map((r) => ({ high: +r.high, low: +r.low, close: +r.close }))
-        );
-        const events = [];
-        const formingIdx = rows.length - 1; // skip the forming bar
-        for (let i = Math.max(2, rows.length - 5); i < formingIdx; i++) {
-          const b = bias[i];
-          if (!b || (!b.bullishTp && !b.bearishTp)) continue;
-          const r = rows[i];
-          const dir = b.bullishTp ? 'bull' : 'bear';
-          // ATR = avg (high-low) over the 14 bars before the signal (grade scale).
-          let atrSum = 0, atrN = 0;
-          for (let k = Math.max(0, i - 14); k < i; k++) { atrSum += (+rows[k].high - +rows[k].low); atrN++; }
-          events.push({
-            signalKey: `${dir}:${r.slotKey}`,
-            date: r.date, symbol: '/ES', dir,
-            triggerTs: Number(r.timestamp), slotKey: r.slotKey, time: r.time,
-            price: +r.close, upBias: b.momentumUpBias, downBias: b.momentumDownBias,
-            boundary: b.boundary, atr: atrN ? atrSum / atrN : 0,
-          });
-        }
-        if (events.length) recordSignals(events).catch(() => {});
-      } catch (e) {
-        console.warn('[momentum-bias] compute failed:', e.message);
-      }
-    }
+    // (Momentum Bias TP/reversal signal recording lived here until 2026-10-10.
+    // Off since 2026-10-09 — nothing read momentum_bias_signals — and then
+    // retired with state/momentum-bias-writer.js → Vanilla/retired-2026-10-10/.)
 
     // Broadcast ONLY the bars that changed this cycle (typically the forming bar,
     // plus a just-closed one). The client merges by slotKey, so a partial array

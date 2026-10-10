@@ -6,6 +6,10 @@
 // written for, so anything whose date is not the NEXT premarket session is
 // stale — Friday's read on a Monday pre-open, or yesterday's after the 16:00
 // close. A stale summary shows the "coming at 8am" message, not itself.
+//
+// The /ES gap line under the bullets was removed 2026-10-10: its source
+// (/api/es-gap, es-gap-tracker.js) stopped recording in 2026-09, so the card
+// fetched it on every load and always got nothing back.
 
 import {
   FS,
@@ -15,24 +19,10 @@ import {
   CardTitle,
   Row,
   UpdatedStamp,
-  divider,
-  etDateISO,
   nextPremarketDate,
   useLiveData,
 } from '../kit'
 import { V2, V2W } from '@/design/theme'
-
-interface EsGapResp {
-  date?: string
-  gap?: {
-    prior_close?: number
-    open_0930?: number
-    gap_pts?: number
-    gap_dir?: string
-    pct_filled?: number
-    filled?: boolean | number
-  } | null
-}
 
 interface PremarketSummaryResp {
   summary?: { date?: string; bullets?: string[]; generated_at?: number } | null
@@ -44,7 +34,6 @@ export function PremarketCard() {
     '/api/premarket-summary',
     5 * 60_000,
   )
-  const { data: gapData } = useLiveData<EsGapResp>(`/api/es-gap?date=${etDateISO()}`)
 
   const bullets = data?.summary?.bullets ?? []
   const sumDate = data?.summary?.date ?? null
@@ -54,11 +43,6 @@ export function PremarketCard() {
   // Shown before 08:00, after the 16:00 close, at weekends, and whenever the
   // stored summary belongs to a session that has already been and gone.
   const emptyMsg = 'Summary will be up at 8:00 AM Eastern.'
-
-  const g = gapData?.gap ?? null
-  const gapPts = g?.gap_pts ?? null
-  // Note the test is `> 0`, so a dead-flat zero gap paints red. v2's behaviour.
-  const up = (gapPts ?? 0) > 0
 
   return (
     <AnalysisCard>
@@ -95,26 +79,6 @@ export function PremarketCard() {
             </li>
           ))}
         </ul>
-      )}
-      {gapPts != null && (
-        <>
-          <div style={divider} />
-          <span
-            style={{
-              fontSize: FS.body,
-              color: V2.muted,
-              opacity: 0.8,
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            /ES gap:{' '}
-            <span style={{ color: up ? V2.pos : V2.red }}>
-              {up ? '+' : ''}
-              {gapPts.toFixed(2)} pts
-            </span>
-            {g?.prior_close ? ` (${((gapPts / g.prior_close) * 100).toFixed(2)}%)` : ''}
-          </span>
-        </>
       )}
       <UpdatedStamp at={lastUpdated} />
     </AnalysisCard>

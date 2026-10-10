@@ -76,6 +76,8 @@ const PANEL_ID = 'cbedge-watchlist'
 const PREFS_KEY = 'cb-v3-vela-watchlist-adv'
 const NEW_VALUE = '__new__'
 const TICK_MS = 15_000
+/** No mouse, key, wheel or touch for this long and the view stops reading; any of them resumes it. */
+const IDLE_MS = 10 * 60_000
 
 type Tab = 'price' | 'fin' | 'news'
 type Period = '1D' | '5D' | '1M'
@@ -249,6 +251,9 @@ class AdvancedView {
   private timer: ReturnType<typeof setInterval> | null = null
   private raf = 0
   private readonly offs: (() => void)[] = []
+  private lastActive = Date.now()
+  private paused = false
+  private idleNote: HTMLElement | null = null
 
   constructor(
     private readonly ctx: WidgetContext,
@@ -340,6 +345,17 @@ class AdvancedView {
     }
     doc.addEventListener('keydown', onKey, true)
     this.offs.push(() => doc.removeEventListener('keydown', onKey, true))
+    // idle pause: after IDLE_MS with no input the ticks stop reading (a visible but
+    // unattended tab otherwise polls all day); the next input resumes and catches up
+    const onActive = () => {
+      this.lastActive = Date.now()
+      if (this.paused) this.resume()
+    }
+    const opts: AddEventListenerOptions = { capture: true, passive: true }
+    for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'] as const) {
+      doc.addEventListener(ev, onActive, opts)
+      this.offs.push(() => doc.removeEventListener(ev, onActive, opts))
+    }
     this.offs.push(onWatchlist(() => this.schedule()))
     this.offs.push(onAdvancedData(() => this.schedule()))
     const mq = typeof matchMedia === 'function' ? matchMedia('(max-width: 760px)') : null
@@ -374,14 +390,32 @@ class AdvancedView {
 
   private tick(): void {
     if (document.hidden || !this.root.isConnected) return
+    if (this.paused) return
+    if (Date.now() - this.lastActive > IDLE_MS) return this.pause()
     const syms = activeList().symbols
     void refreshQuotes(syms)
-    void loadStats(syms)
+    // the selected row's stats first (its chart on the right); the full tape only for 1M
+    const sel = this.selected()
+    void loadStats(sel ? [sel, ...syms.filter((s) => s !== sel)] : syms, this.prefs.period === '1M')
     // lean: GEX only for the SPX card and the selected row, not every symbol
     void loadGex(this.gexSyms())
     void loadWhales()
     void loadEarnings()
     void loadEcon()
+  }
+
+  private pause(): void {
+    this.paused = true
+    const note = el(this.doc, 'div', 'cb-wla-idle', 'Paused while you’re away — move the mouse to resume')
+    note.setAttribute('role', 'status')
+    this.idleNote = note
+    this.root.append(note)
+  }
+  private resume(): void {
+    this.paused = false
+    this.idleNote?.remove()
+    this.idleNote = null
+    this.tick()
   }
 
   private schedule(): void {
@@ -611,7 +645,10 @@ class AdvancedView {
     for (const p of ['1D', '5D', '1M'] as const) {
       const b = btn(doc, '', p)
       if (p === this.prefs.period) b.dataset.on = '1'
-      b.addEventListener('click', () => this.setPrefs({ period: p }))
+      b.addEventListener('click', () => {
+        this.setPrefs({ period: p })
+        if (p === '1M') void loadStats(activeList().symbols, true)
+      })
       seg.append(b)
     }
     tools.append(seg, el(doc, 'span', 'cb-wla-note', 'change measured over'), el(doc, 'span', 'cb-wla-sp'), el(doc, 'span', 'cb-wla-note cb-wla-hide-n', this.prefs.sort ? 'Sorted inside each group · click the column again to flip' : 'Click a column to sort · ⋯ on a row to open, move or remove'))

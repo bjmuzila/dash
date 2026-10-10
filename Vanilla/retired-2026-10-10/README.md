@@ -13,3 +13,22 @@ the live app requires these files. Their Postgres tables were left in place.
 | server-v2/day-post-writer.js | 3 AI X posts a day → day_posts | nothing read day_posts (on-demand /api/social-media/day-post still works) |
 
 Paths below this folder mirror where each file used to live.
+
+## Second pass, same day — recorders that were already switched off
+
+None of these were running. They were still wired in (requires, routes, gated
+start lines), so they were unwired and parked here. `LEGACY_RECORDERS` no longer
+exists.
+
+| Retired | Was | Routes removed |
+|---|---|---|
+| server-v2/forward-scanner-recorder.js | next-expiry walls → scanner_forward | /proxy/walls-forward, -run |
+| server-v2/state/ticker-wall-recorder.js | NDX/SPY/QQQ walls every 60s → ticker_wall_snapshots | /proxy/wall-history |
+| server-v2/momentum-bias-tracker.js, state/momentum-bias-writer.js | ES TP/reversal signals → momentum_bias_signals (incl. the inline block in proxy-tastytrade.js) | /api/momentum-bias |
+| server-v2/preview-snapshot-recorder.js, home-snapshot-recorder.js, mult-greek-snapshot-recorder.js | delayed snapshots for unpaid /preview, /home, /mult-greek | /proxy/preview-snapshot, /proxy/home-snapshot, /proxy/mult-greek-snapshot |
+| server-v2/ict-setup-tracker.js, es-gap-tracker.js | already commented out since 2026-09 | — (/api/ict-setups, /api/es-gap still serve old rows) |
+| server-v2/vol-pin-recorder.js, play-recorder.js, multi-flow.js, state/etf-candle-recorder.js | never wired / empty stub / replaced / duplicate of server-v2/etf-candle-recorder.js | — |
+
+Also unwired (module kept, still used by daily-grades): the walls-reach routes
+/proxy/walls-reach(-run), /proxy/walls-watch(-run), /proxy/walls-alerts, and the
+attachRank() decoration on /proxy/walls (two dead queries per call).

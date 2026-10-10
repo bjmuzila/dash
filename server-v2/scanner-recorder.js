@@ -635,6 +635,11 @@ async function runSweep({ force = false } = {}) {
       }
       if (V.VARIANTS_ENABLED) {
         for (const v of s.variants) {
+          // The default variant is already in scanner_snapshots, and every
+          // reader (walls-recorder, core-hold, /proxy/walls series) sends the
+          // default there — so its copy here was written every sweep and never
+          // read. Skipped since 2026-10-10.
+          if (V.isDefault(v)) continue;
           varRows.push([date, root, now, v.scope, v.basis, v.expiry, v.expiries, s.spot, v.totalNetGex,
             v.callWall, v.putWall, v.gexFlip, v.cb, v.strikes, v.callWallGex, v.putWallGex, v.cbGex]);
         }

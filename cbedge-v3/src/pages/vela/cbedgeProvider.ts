@@ -380,12 +380,18 @@ const LEVEL_FUT_DAYS = 5
 /** Long enough that a 60 s Volt Watch round re-reads every other round, not every round. */
 export const LEVEL_BARS_STALE_MS = 110_000
 
-/** The last few sessions of 5-minute bars for `ticker`, session-filtered like getBars. */
-export async function recentBars5(ticker: string, session: string | undefined, staleMs = LEVEL_BARS_STALE_MS): Promise<OHLCV[]> {
+/**
+ * The last few sessions of 5-minute bars for `ticker`, session-filtered like getBars.
+ * `sessions` defaults to the level reads' 4; the watchlist's Advanced view asks for a
+ * few more (its 5-day line and relative volume) without the 30-session tape.
+ */
+export async function recentBars5(ticker: string, session: string | undefined, staleMs = LEVEL_BARS_STALE_MS, sessions = LEVEL_SESSIONS): Promise<OHLCV[]> {
   const sym = resolveSym(ticker)
+  // the futures route counts calendar days: a session count plus weekends and a holiday
+  const futDays = sessions === LEVEL_SESSIONS ? LEVEL_FUT_DAYS : Math.ceil((sessions * 7) / 5) + 2
   const url = sym.fut
-    ? esCandlesUrl(5, LEVEL_FUT_DAYS, sym.fut)
-    : `${candlesUrl(symbolDef(sym.key), 5, LEVEL_SESSIONS)}&limit=${ETF_ROW_LIMIT}`
+    ? esCandlesUrl(5, futDays, sym.fut)
+    : `${candlesUrl(symbolDef(sym.key), 5, sessions)}&limit=${ETF_ROW_LIMIT}`
   const json = await query<unknown>(url, { staleMs })
   const tape = sym.fut ? parseEsCandles(json) : parseCandles(json)
   const newest = tape[tape.length - 1]

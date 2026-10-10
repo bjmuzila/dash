@@ -840,13 +840,23 @@ span.cb-wla-hc,
 }
 .cb-wla .cb-wla-news {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* prints · earnings · calendar stay three across on any desktop width (the
+     calendar used to wrap under the other two); a phone stacks them (below) */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
   gap: 12px;
   padding: 12px 16px 16px;
 }
 .cb-wla .cb-wla-newsnote {
   grid-column: 1 / -1;
+}
+.cb-wla .cb-wla-news .cb-wla-box {
+  min-width: 0;
+}
+/* narrow columns: a row's figures drop under its title rather than off the edge */
+.cb-wla .cb-wla-news .cb-wla-item {
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 .cb-wla .cb-wla-fin .cb-wla-td small {
   margin-left: 4px;
@@ -1102,6 +1112,7 @@ span.cb-wla-hc,
   text-decoration: underline;
 }
 .cb-wla .cb-wla-news {
+    grid-template-columns: minmax(0, 1fr);
     padding: 10px 12px;
 }
 }

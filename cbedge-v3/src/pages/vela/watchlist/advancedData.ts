@@ -2,9 +2,12 @@
 // VELA WATCHLIST — what the Advanced view reads, beyond the quotes (store.ts).
 // Every source is one the app already serves; nothing here is new on the server.
 //
-//   STATS     per symbol, the chart tape: 30 days of 5-minute regular-hours bars
-//             through the chart's own provider (CbEdgeProvider.getBars — the same
-//             cached request a 5m chart of that symbol makes). From them: today's
+//   STATS     per symbol, 5-minute regular-hours bars. FAST (2026-10-10): the last
+//             STATS_SESSIONS sessions through recentBars5 (the short tape the level
+//             reads use, a fraction of the 30-session one); the full 30-session
+//             chart tape (CbEdgeProvider.getBars) only once someone picks 1M, the
+//             one figure that needs it. Relative volume then averages the sessions
+//             the short tape holds (~6) instead of 20. From them: today's
 //             open / high / low and volume, RELATIVE VOLUME (today's volume so
 //             far against the average of the last 20 sessions at the same minute
 //             of the day), the 5-day line, the 30-day range, the closes 5 and ~21
@@ -33,7 +36,7 @@ import type { OHLCV } from '@luxalgo/vela'
 import { query } from '@/data/api'
 import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
-import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
+import { CbEdgeProvider, recentBars5, resolveSym } from '@/pages/vela/cbedgeProvider'
 
 export interface SymStats {
   open: number | null
@@ -203,7 +206,8 @@ export function statsFromBars(bars: readonly OHLCV[]): SymStats | null {
     intraday: today.map((b) => b.close),
     range30: Number.isFinite(rlo) && Number.isFinite(rhi) ? { lo: rlo, hi: rhi } : null,
     close5: lastClose(days[days.length - 6]),
-    close21: lastClose(days[days.length - 22] ?? days[0]),
+    // a short tape cannot reach a month back: no 1M figure rather than a wrong one
+    close21: days.length >= 22 ? lastClose(days[days.length - 22]) : null,
     at: Date.now(),
   }
 }
@@ -213,13 +217,21 @@ const STATS_MS = 15 * 60_000
 const GEX_MS = 5 * 60_000
 const WHALES_MS = 5 * 60_000
 
-export async function loadStats(syms: readonly string[]): Promise<void> {
+/** Sessions in the short tape: today, the 5 the 5-day line and 5D change need, and one spare. */
+const STATS_SESSIONS = 7
+/** Symbols whose stats came off the full 30-session tape (asked for by the 1M period). */
+const statsDeep = new Set<string>()
+
+/** `deep`: the 30-session tape (1M change); otherwise the short one. Callers list the selected symbol first. */
+export async function loadStats(syms: readonly string[], deep = false): Promise<void> {
   const now = Date.now()
-  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS).slice(0, 80)
+  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS || (deep && !statsDeep.has(s))).slice(0, 80)
   for (const s of due) statsAt.set(s, now)
-  await pool(due, 3, async (s) => {
+  await pool(due, 4, async (s) => {
     try {
-      const bars = await provider.getBars(s, '5', {})
+      const full = deep || statsDeep.has(s)
+      const bars = full ? await provider.getBars(s, '5', {}) : await recentBars5(s, undefined, STATS_MS, STATS_SESSIONS)
+      if (full) statsDeep.add(s)
       stats.set(s, statsFromBars(bars))
     } catch {
       if (!stats.has(s)) stats.set(s, null)

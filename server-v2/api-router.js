@@ -5280,27 +5280,7 @@ if (libDb) {
     },
   });
 
-  // /api/momentum-bias?date|since|all|limit → { date, since, signals, summary }
-  register('/api/momentum-bias', {
-    auth: 'subscriber', methods: ['GET'],
-    async handler(req, res) {
-      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-      const since = sp.get('since') || undefined;
-      const all = sp.get('all') === '1';
-      const limit = Math.min(1000, Math.max(1, Number(sp.get('limit')) || 200));
-      const date = all || since ? undefined : (sp.get('date') || etDateStr());
-      try {
-        const [signals, summary] = await Promise.all([
-          libDb.getMomentumBiasSignals({ date, sinceDate: since, limit }),
-          libDb.getMomentumBiasSummary({ date, sinceDate: since }),
-        ]);
-        send(res, 200, { date: date ?? null, since: since ?? null, signals, summary },
-          { 'Cache-Control': 'no-store' });
-      } catch (e) {
-        send(res, 500, { error: e.message, signals: [], summary: [] });
-      }
-    },
-  });
+  // /api/momentum-bias RETIRED 2026-10-10 (no caller; its writer is in Vanilla/retired-2026-10-10/).
 
   // /api/ref-levels?symbol=ES → PDH/PDL (day) + PWH/PWL (week) from ref_levels
   register('/api/ref-levels', {
