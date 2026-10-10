@@ -1,8 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // VELA WATCHLIST — ADVANCED VIEW. The full watchlist over the chart area
-// (velacharts.dev's Advanced view, in CB Edge's terms): opened from the docked
-// Watchlist's ⤢, closed with "Return to chart" (or Escape), which puts the
-// docked panel back. Loaded on first open — the Vela page carries none of it.
+// (velacharts.dev's Advanced view, in CB Edge's terms): opened from the desktop
+// top bar's Watchlist button (watchlistButton.ts, since 2026-10-09: the place the
+// Journal button had) or the docked Watchlist's ⋯ → Advanced view, closed with
+// "Return to chart" (or Escape), which puts the docked panel back if it was open.
+// Loaded on first open — the Vela page carries none of it.
 //
 //   header    list picker · Price / Financials / News & events · Add symbol ·
 //             Group by (type / your sections / none) · Columns · Return to chart
@@ -204,10 +206,28 @@ function typeName(sym: string): string {
 
 let open: AdvancedView | null = null
 
-/** Open the Advanced view over the chart area (one at a time). */
-export function openAdvanced(ctx: WidgetContext): void {
+/**
+ * Open the Advanced view over the chart area (one at a time).
+ *
+ * `restoreDock`: on close, open the docked Watchlist panel again. True from the
+ * panel's ⋯ → Advanced view (it closed the dock to make way). The top-bar
+ * Watchlist button (pages/vela/watchlistButton.ts) passes whether the dock was
+ * open when it was pressed, so "Return to chart" goes back to the chart as it was
+ * rather than opening a panel nobody asked for.
+ */
+export function openAdvanced(ctx: WidgetContext, opts: { restoreDock?: boolean } = {}): void {
   if (open) return
-  open = new AdvancedView(ctx)
+  open = new AdvancedView(ctx, opts.restoreDock ?? true)
+}
+
+/** Is the Advanced view up right now? */
+export function advancedOpen(): boolean {
+  return open !== null
+}
+
+/** Close the Advanced view if it is up (the top-bar button's second press). */
+export function closeAdvanced(): void {
+  open?.close()
 }
 
 class AdvancedView {
@@ -230,7 +250,10 @@ class AdvancedView {
   private raf = 0
   private readonly offs: (() => void)[] = []
 
-  constructor(private readonly ctx: WidgetContext) {
+  constructor(
+    private readonly ctx: WidgetContext,
+    private readonly restoreDock: boolean,
+  ) {
     const doc = (this.doc = ctx.host.ownerDocument)
     const root = (this.root = el(doc, 'div', 'cb-wla'))
     root.setAttribute('role', 'dialog')
@@ -344,8 +367,9 @@ class AdvancedView {
     this.groupSel.destroy()
     this.root.remove()
     open = null
-    // the docked panel comes back where it was (a phone goes straight to the chart)
-    if (!narrow()) this.ctx.togglePanel(PANEL_ID, true)
+    // the docked panel comes back where it was, when it was open before (a phone
+    // goes straight to the chart)
+    if (this.restoreDock && !narrow()) this.ctx.togglePanel(PANEL_ID, true)
   }
 
   private tick(): void {

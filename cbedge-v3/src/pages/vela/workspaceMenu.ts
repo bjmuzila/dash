@@ -12,7 +12,9 @@
 //   SCRIPTS  Script editor  Alt+E · Strategy Tester  Alt+B
 //   ALERTS   Level alerts  Alt+A · Script alerts
 //   LAYOUT   Setups · Copy indicators to all charts · Center today on all charts
-//            Alt+C · Chart settings
+//            Alt+C · Chart settings · Journal (owner only; opens journal.cbedge.net
+//            in its own tab — it was a top-bar button until 2026-10-09, see
+//            journalLink.ts)
 //
 // Copy indicators makes every chart an exact copy of the one you are on
 // (copyIndicators.ts); Center today frames every chart on its newest session,
@@ -47,6 +49,7 @@ import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { centerTodayAll } from '@/pages/vela/centerToday'
 import { copyToAll } from '@/pages/vela/copyIndicators'
 import { LEVELS_PANEL_ID } from '@/pages/vela/levels/levelAlertsEntry'
+import { journalAllowed, openJournal } from '@/pages/vela/journalLink'
 import { onPhoneRoute } from '@/pages/vela/nav'
 import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from '@/pages/vela/script/ids'
 import { setStripShown, setTapeSort, stripShown, tapeSort } from '@/pages/vela/setups/setups'
@@ -64,6 +67,7 @@ export type WsItem =
   | { kind: 'copy'; id: string; label: string; icon: string }
   | { kind: 'center'; id: string; label: string; icon: string; keys?: string }
   | { kind: 'settings'; id: string; label: string; icon: string }
+  | { kind: 'journal'; id: string; label: string; icon: string }
 
 export interface WsGroup {
   title: string
@@ -103,6 +107,8 @@ export const WS_GROUPS: readonly WsGroup[] = [
       { kind: 'copy', id: 'copy-indicators', label: 'Copy indicators to all charts', icon: 'cb-copy-ind' },
       { kind: 'center', id: 'center-today', label: 'Center today on all charts', icon: 'cb-center', keys: 'alt+c' },
       { kind: 'settings', id: 'chart-settings', label: 'Chart settings…', icon: 'gear' },
+      // owner only: itemShown() hides it until /api/tradejournal/verify says 200
+      { kind: 'journal', id: 'journal', label: 'Journal', icon: 'cb-journal' },
     ],
   },
 ]
@@ -117,6 +123,11 @@ let registered = false
 /** The docked panel that is open, if any (one read of the workspace state per menu draw). */
 export function openPanelOf(ws: VelaWorkspace | null): string | undefined {
   return ws?.getState().panels?.open
+}
+
+/** Is this row in the menu for this viewer? Only Journal is ever hidden (owner only). */
+export function itemShown(item: WsItem): boolean {
+  return item.kind !== 'journal' || journalAllowed()
 }
 
 /** Is this row's thing on right now? A panel: docked open. The strip: shown. */
@@ -157,6 +168,9 @@ export function runItem(item: WsItem, ctx: WidgetContext, anchor: HTMLElement | 
       return
     case 'settings':
       current?.active.chart.renderer.openSettings()
+      return
+    case 'journal':
+      openJournal()
       return
   }
 }

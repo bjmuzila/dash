@@ -76,3 +76,16 @@ mobile-build.bundle
 # same Windows-lockfile problem described in the Dockerfile).
 app-vite/node_modules
 app-vite/dist
+
+# Runtime and deploy state on the VPS (2026-10-09). Both sit inside the build
+# context but are written while the site runs: ./state is mounted over /app/state
+# at runtime anyway, and .deploy/ is deploy.sh's own bookkeeping. Left in, they
+# changed the `COPY . .` layer on every build — so the same commit never produced
+# the same image and every deploy restarted the server — and ./state (client-site
+# logins, relay dedupe) was being baked into the image.
+state
+.deploy
+# Deploy tooling — never read by any image.
+push.ps1
+deploy.sh
+dev.ps1

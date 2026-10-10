@@ -30,7 +30,8 @@ import { ALERT_BELL_ID, bindAlertBell, registerAlertBell } from '@/pages/vela/al
 import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
-import { bindJournalLink, JOURNAL_ACTION_ID, registerJournalLink } from '@/pages/vela/journalLink'
+import { bindJournalLink, registerJournalLink } from '@/pages/vela/journalLink'
+import { bindWatchlistButton, registerWatchlistButton, WATCHLIST_ACTION_ID } from '@/pages/vela/watchlistButton'
 import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
 import { GEX_BASIS_ACTION_ID, bindGexBasis, registerGexBasis } from '@/pages/vela/gexBasisMenu'
 import { patchVwapSession } from '@/pages/vela/vwapSession'
@@ -198,7 +199,7 @@ import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-topbar-r2.html). Vela's
 // `topbar` composition, DESKTOP_TOPBAR below, is the bar's whole contract:
 //
-//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | GEX · Vol ▾ | Replay | ↶ ↷ …  ● RTH closes in 2:14:47  🔔  Workspace ▾ | 📷
+//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | GEX · Vol ▾ | Replay | ↶ ↷ …  ● RTH closes in 2:14:47  🔔  Workspace ▾  Watchlist | 📷
 //
 //   · GEX    the ONE GEX book every indicator reads, OI only / OI + Vol / Vol only
 //            (pages/vela/gexBasis.ts, gexBasisMenu.ts; Brandon, 2026-10-07). No
@@ -210,9 +211,11 @@ import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 //   · right  the session chip (pages/vela/sessionClock.ts, see "The bottom of the
 //            chart" below; a click opens Chart settings → Symbol, where the time
 //            zone is), Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
-//            the panels, Scripts, Level / Script alerts, Setups, Volt watch and
-//            Copy indicators, each a named row, the common ones on Alt keys), and
-//            the camera. Vela's panel buttons and the right-hand action flow are
+//            the panels, Scripts, Level / Script alerts, Setups, Volt watch,
+//            Copy indicators and, for the owner, Journal, each a named row, the
+//            common ones on Alt keys), Watchlist (the watchlist's Advanced view in
+//            one click, pages/vela/watchlistButton.ts; 2026-10-09, in the place
+//            the Journal button had), and the camera. Vela's panel buttons and the right-hand action flow are
 //            not listed, so the twelve icons that were here are gone
 //   · fit    on a narrower window the bar gives things up in steps until it fits
 //            (pages/vela/topbarFit.ts; Brandon, 2026-10-05, a Chromebook): the
@@ -315,9 +318,10 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
 const DESKTOP_TOPBAR = {
   left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', GEX_BASIS_ACTION_ID, 'actions', 'undo-redo'],
   // ↻ beside the camera: candles, data and the live feed refreshed in place (vela/refreshChart.ts)
-  // Journal beside Workspace: opens journal.cbedge.net in its own tab (vela/journalLink.ts)
+  // Watchlist beside Workspace: the watchlist's Advanced view in one click (vela/watchlistButton.ts).
+  // It took the Journal button's place (2026-10-09); Journal is a row in Workspace → Layout.
   // the bell is ours (vela/alertBell.ts): today's Level, Script and chart alerts, kept in Postgres
-  right: [CLOCK_ACTION_ID, ALERT_BELL_ID, WORKSPACE_ACTION_ID, JOURNAL_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
+  right: [CLOCK_ACTION_ID, ALERT_BELL_ID, WORKSPACE_ACTION_ID, WATCHLIST_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
 }
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
@@ -339,6 +343,7 @@ registerSetups()
 registerSymbolPicker()
 registerWorkspaceMenu()
 registerJournalLink()
+registerWatchlistButton()
 registerSessionClock()
 // one GEX book for every indicator (OI only / OI + Vol / Vol only), beside Indicators
 registerGexBasis()
@@ -559,8 +564,10 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
     const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
-    // Journal shows for the owner only: asks /api/tradejournal/verify once (vela/journalLink.ts)
+    // Journal (a Workspace → Layout row) shows for the owner only: asks /api/tradejournal/verify once (vela/journalLink.ts)
     const unbindJournal = onPhone ? () => {} : bindJournalLink(ws)
+    // the top bar's Watchlist button reads whether the docked panel is open (vela/watchlistButton.ts)
+    const unbindWatchlistBtn = onPhone ? () => {} : bindWatchlistButton(ws)
     // the GEX button names the book every indicator is on (vela/gexBasisMenu.ts)
     const unbindGex = onPhone ? () => {} : bindGexBasis(ws)
     // The legend card on every chart (vela/legend/legendCard.ts), in place of Vela's
@@ -654,6 +661,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindPicker()
       unbindWorkspace()
       unbindJournal()
+      unbindWatchlistBtn()
       unbindGex()
       legendGone = true
       unbindLegend()

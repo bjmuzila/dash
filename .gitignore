@@ -73,3 +73,6 @@ data/*_1min.csv
 # Untracked, the failure is loud again: no fallback, /v3 404s, and a broken v3
 # build is visible the moment it happens instead of three weeks later.
 public/v3
+
+# deploy.sh bookkeeping on the VPS (last good deploy, :prev image list, history)
+/.deploy/

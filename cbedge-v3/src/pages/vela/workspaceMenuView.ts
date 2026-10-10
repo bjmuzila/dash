@@ -14,6 +14,9 @@
 //   Open now: Watchlist · Volt watch
 //   ← → switch tabs                     ? all shortcuts
 //
+// Layout ends with Journal (journal.cbedge.net in a new tab) for the owner only;
+// everyone else never sees the row (itemShown).
+//
 // The switch shows one group's rows; the menu keeps the height of the longest
 // group, so it never jumps as the tab changes. It reopens on the tab used last
 // (this browser). A dot on a tab: something in it is on. "Open now" names every
@@ -27,7 +30,7 @@
 import type { WidgetContext } from '@luxalgo/vela'
 import { iconEl } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { itemOn, keyLabel, openPanelOf, runItem, sortValue, WS_GROUPS, type WsItem } from './workspaceMenu'
+import { itemOn, itemShown, keyLabel, openPanelOf, runItem, sortValue, WS_GROUPS, type WsItem } from './workspaceMenu'
 
 let open: { el: HTMLElement; close: () => void } | null = null
 
@@ -64,7 +67,7 @@ export function toggleWorkspaceMenu(ctx: WidgetContext, ws: VelaWorkspace | null
   const tabs: HTMLButtonElement[] = []
   let tab = readTab()
   /** Rows of the longest group: the list keeps that height on every tab. */
-  const tallest = Math.max(...WS_GROUPS.map((g) => g.items.length))
+  const tallest = Math.max(...WS_GROUPS.map((g) => g.items.filter(itemShown).length))
 
   const draw = (focus: 'row' | 'tab' | null = null) => {
     const had = rows.indexOf(document.activeElement as HTMLButtonElement)
@@ -102,7 +105,7 @@ export function toggleWorkspaceMenu(ctx: WidgetContext, ws: VelaWorkspace | null
     list.setAttribute('role', 'tabpanel')
     // + the list's own 4px bottom padding (border-box)
     list.style.minHeight = `calc(${tallest} * var(--cb-wsm-row) + 4px)`
-    for (const item of WS_GROUPS[tab]?.items ?? []) list.append(row(item, openPanel))
+    for (const item of WS_GROUPS[tab]?.items ?? []) if (itemShown(item)) list.append(row(item, openPanel))
 
     const on = WS_GROUPS.flatMap((g) => g.items).filter((it) => it.kind !== 'sort' && itemOn(it, openPanel))
     const now = el('div', 'cb-wsm-now')
@@ -136,6 +139,9 @@ export function toggleWorkspaceMenu(ctx: WidgetContext, ws: VelaWorkspace | null
     else if (item.kind === 'sort') {
       right.append(el('span', 'cb-wsm-value', sortValue()))
       b.title = 'Click to switch: nearest Volt first, or A–Z'
+    } else if (item.kind === 'journal') {
+      right.append(el('span', 'cb-wsm-value', '↗'))
+      b.title = 'Opens journal.cbedge.net in a new tab'
     } else if (on) right.append(el('span', 'cb-wsm-check', '✓'))
     b.append(right)
     b.addEventListener('click', () => {

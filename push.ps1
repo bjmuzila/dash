@@ -3,15 +3,39 @@
 #   -LocalBuild  : force the local build gate ON
 #   -NoCache     : force a clean VPS image rebuild (use after dependency changes)
 #   -Force       : push even during market hours (see the guard below)
+#   -Rollback    : put the previous deploy's images back on the VPS (seconds, no
+#                  rebuild, nothing committed). Works during market hours.
+#   -Status      : show what is live on the VPS and what -Rollback would restore
+#
+# The VPS side of a deploy is deploy.sh (in the repo, pulled before it runs): it
+# rebuilds only the services a commit touched, health-checks the result and puts
+# the previous images back on its own if the new version does not come up.
 param(
     [switch]$SkipBuild,
     [switch]$LocalBuild,
     [switch]$NoCache,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Rollback,
+    [switch]$Status
 )
 
+# --- VPS deploy target ---
+$vpsHost = "root@178.156.137.36"
+$vpsKey  = "$env:USERPROFILE\.ssh\cbedge"
+$sshOpts = @("-i", $vpsKey, "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
+
+# --- rollback / status: no commit, no version bump, allowed any time ---
+if ($Rollback -or $Status) {
+    $sub = if ($Rollback) { "rollback" } else { "status" }
+    & ssh @sshOpts $vpsHost "cd /opt/dashboard && bash deploy.sh $sub"
+    exit $LASTEXITCODE
+}
+
 # --- market-hours guard (2026-10-09) ---
-# A push rebuilds every image ON the live VPS and restarts the dashboard. On
+# A push that touches the trading server (server-v2/, cbedge-v3/, app/, ...)
+# rebuilds and restarts the dashboard. deploy.sh now skips the restart when a
+# push only touches owner/budget/recipe/daily/voltick/nginx files, but this guard
+# cannot tell which kind you are about to push, so it blocks both. On
 # 2026-10-09 one push at 09:01 ET restarted the server into the open and the
 # site crawled for the next hour. So: no pushes 09:00-16:15 ET on weekdays
 # unless you pass -Force on purpose (an outage fix you cannot wait on).
@@ -26,10 +50,6 @@ if ($etWeekday -and $etMins -ge 540 -and $etMins -lt 975 -and -not $Force) {
 
 $repoRoot = "C:\Users\Brandon\Desktop\spx-gex-dashboard-tt-fixed"
 $packageJsonPath = "$repoRoot\package.json"
-
-# --- VPS deploy target ---
-$vpsHost = "root@178.156.137.36"
-$vpsKey  = "$env:USERPROFILE\.ssh\cbedge"
 $composeFiles = "-f docker-compose.yml"
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +68,6 @@ $packageJson.version = $version
 Write-Host "Version: $version" -ForegroundColor Cyan
 
 # --- 0. Fail fast on SSH before doing any work ---
-$sshOpts = @("-i", $vpsKey, "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
 & ssh @sshOpts $vpsHost "echo ok" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "SSH to VPS failed (key not loaded / host unreachable). Nothing pushed." -ForegroundColor Red
@@ -100,23 +119,19 @@ git checkout main
 Write-Host "Pushed $version to GitHub (main + prod). Deploying on VPS..." -ForegroundColor Cyan
 
 # --- 5. VPS deploy over SSH ---
-# Reads .env.local on the VPS and passes Supabase keys as Docker build args
-# so Next.js can bake them into the client bundle at build time.
-$buildFlags = if ($NoCache) { "--no-cache" } else { "" }
+# Pull first, so the deploy.sh that runs is the one in THIS commit. deploy.sh
+# exports the NEXT_PUBLIC_* build args from .env.local itself, works out which
+# services this push touched, builds only those, and health-checks the result.
+# --seed is only used the very first time (before deploy.sh has a record of a
+# good deploy); after that it diffs from the last deploy that passed.
+$deployFlags = if ($NoCache) { "--no-cache" } else { "" }
 $LF = [char]10
 $deployLines = @(
     "set -e",
     "cd /opt/dashboard",
-    "git pull",
-    # Export ONLY the vars compose interpolates - .env.local holds multiline/
-    # quoted secrets that a blanket `export $(... | xargs)` chokes on.
-    'for v in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY NEXT_PUBLIC_OWNER_USER_ID NEXT_PUBLIC_TURNSTILE_SITE_KEY APP_PORT; do',
-    '  val=$(grep -m1 "^${v}=" .env.local | cut -d= -f2- | sed -e ''s/^"//'' -e ''s/"$//'')',
-    '  export "${v}=${val}"',
-    'done',
-    "docker compose $composeFiles build $buildFlags --build-arg NEXT_PUBLIC_SUPABASE_URL=`$NEXT_PUBLIC_SUPABASE_URL --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=`$NEXT_PUBLIC_SUPABASE_ANON_KEY --build-arg NEXT_PUBLIC_OWNER_USER_ID=`$NEXT_PUBLIC_OWNER_USER_ID --build-arg NEXT_PUBLIC_TURNSTILE_SITE_KEY=`$NEXT_PUBLIC_TURNSTILE_SITE_KEY",
-    "docker compose $composeFiles up -d",
-    "docker compose $composeFiles ps"
+    'BEFORE=$(git rev-parse HEAD)',
+    "git pull --ff-only",
+    "bash deploy.sh --seed `$BEFORE $deployFlags"
 )
 $deployScript = ($deployLines -join $LF) + $LF
 $deployScript = $deployScript -replace "[\r]", ""
@@ -124,10 +139,14 @@ $deployScript = $deployScript -replace "[\r]", ""
 $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($deployScript))
 & ssh @sshOpts $vpsHost "echo $encoded | base64 -d | bash -s"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "VPS deploy FAILED. Code is on GitHub - SSH in and rerun, or rollback: git reset --hard HEAD~1" -ForegroundColor Red
+    Write-Host "VPS deploy FAILED - the message above says which way:" -ForegroundColor Red
+    Write-Host "  'build failed'          -> nothing was restarted; the old version is still live." -ForegroundColor Yellow
+    Write-Host "  'was rolled back'       -> the new version did not come up; the old one is back." -ForegroundColor Yellow
+    Write-Host "  anything else           -> run .\push.ps1 -Status, and .\push.ps1 -Rollback if the site is down." -ForegroundColor Yellow
+    Write-Host "Code is on GitHub either way. Fix and push again; the next deploy picks up everything since the last good one." -ForegroundColor DarkGray
     exit 1
 }
 
-Write-Host "Done! $version is live." -ForegroundColor Green
+Write-Host "Done! $version is live.  (undo: .\push.ps1 -Rollback)" -ForegroundColor Green
 Write-Host "Watch logs with:" -ForegroundColor DarkGray
 Write-Host "  ssh -i $vpsKey $vpsHost 'cd /opt/dashboard; docker compose $composeFiles logs -f'" -ForegroundColor DarkGray
