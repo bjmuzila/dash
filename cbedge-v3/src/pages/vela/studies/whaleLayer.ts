@@ -93,6 +93,12 @@ export interface WhalePayload {
   bubbles: WhaleBubble[]
   /** Fill opacity 0..1 — the study's Bubble opacity % (0.3 when absent, how they always drew). */
   fill?: number
+  /**
+   * The Price zone (2026-10-10): a band as tall as the bubble, from its centre to the
+   * plot's right edge — for the hovered bubble, every bubble, or none (absent: none,
+   * so the journal markers that share this layer draw no zones).
+   */
+  zone?: 'hover' | 'all' | 'off'
 }
 
 /** The fill when the payload carries none. */
@@ -284,12 +290,15 @@ export class WhaleLayer implements RendererLayerInstance {
     const placed: Placed[] = []
     const bars = args.bars
     const tf = coords.barInterval || (bars.length > 1 ? bars[1]!.time - bars[0]!.time : 60_000)
+    // a bubble scrolled off the left still has its zone running across the view (Every bubble)
+    const offLeft: Placed[] = []
     for (const b of d.bubbles) {
       const x = xAt(b.t, bars, tf, coords)
-      if (x == null || x < -b.r - 2 || x > coords.width + b.r + 2) continue
+      if (x == null || x > coords.width + b.r + 2) continue
       const y = coords.priceToY(b.price, scale, bounds)
       if (!Number.isFinite(y)) continue
-      placed.push({ b, x, y })
+      if (x < -b.r - 2) offLeft.push({ b, x, y })
+      else placed.push({ b, x, y })
     }
     // biggest first: small bubbles stay on top, and are what the pointer finds
     placed.sort((p, q) => q.b.r - p.b.r)
@@ -312,6 +321,33 @@ export class WhaleLayer implements RendererLayerInstance {
     // the side-unknown share and the hover lift, as they were at the 30% default
     const fillMid = fill * (0.16 / FILL_DEF)
     const fillOn = Math.min(1, fill + (0.55 - FILL_DEF))
+    // PRICE ZONES, under the bubbles: the bubble's height, from its centre to the
+    // right edge, a faint fill between two edge lines (the hovered one stronger)
+    const zone = d.zone ?? 'off'
+    if (zone !== 'off') {
+      const right = coords.width
+      const band = (p: Placed, strong: boolean) => {
+        if (p.x >= right) return
+        const c = rgb[p.b.tone]
+        const top = p.y - p.b.r
+        const h = p.b.r * 2
+        ctx.fillStyle = hexA(c, strong ? 0.14 : 0.07)
+        ctx.fillRect(p.x, top, right - p.x, h)
+        ctx.lineWidth = 1
+        ctx.strokeStyle = hexA(c, strong ? 0.75 : 0.4)
+        ctx.beginPath()
+        ctx.moveTo(p.x, Math.round(top) + 0.5)
+        ctx.lineTo(right, Math.round(top) + 0.5)
+        ctx.moveTo(p.x, Math.round(top + h) - 0.5)
+        ctx.lineTo(right, Math.round(top + h) - 0.5)
+        ctx.stroke()
+      }
+      if (zone === 'all') {
+        for (const p of offLeft) band(p, false)
+        for (const p of placed) if (p !== hover) band(p, false)
+      }
+      if (hover) band(hover, true)
+    }
     for (const p of placed) {
       const { b, x, y } = p
       const c = rgb[b.tone]

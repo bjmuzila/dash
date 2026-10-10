@@ -47,6 +47,8 @@ export const WH_ACTION = ['Buys and sells', 'Buys', 'Sells'] as const
 export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
 /** Whale Prints: every strike, or out-of-the-money contracts only (Brandon, 2026-10-09). */
 export const WH_MONEY = ['All strikes', 'OTM only'] as const
+/** Whale Prints' price zone: a band from a bubble's top to its bottom, run right (Brandon, 2026-10-10). */
+export const WH_ZONE = ['On hover', 'Every bubble', 'Off'] as const
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
 /** Net GEX's look: a line, columns, or both. */
 export const NETGEX_STYLES = ['Line', 'Columns', 'Line and columns'] as const
@@ -426,6 +428,15 @@ export function registerStudies(): void {
           tooltip: 'How solid the bubbles are filled: higher is darker and less see-through, lower lets the candles show through. The outline stays.',
         },
         { key: 'text', title: 'Premium in the bubble', type: 'bool', defval: true, tooltip: 'Written inside a bubble when it fits; hover any bubble for the prints.' },
+        {
+          key: 'zone',
+          title: 'Price zone',
+          type: 'string',
+          defval: WH_ZONE[0],
+          options: WH_ZONE,
+          tooltip:
+            'A band from the bubble’s top to its bottom, run right to the edge of the chart, so you can see where later candles meet the whale’s price. On hover: only the bubble under the pointer. Every bubble: all of them, the hovered one stronger.',
+        },
       ],
     },
     () => import('./flow').then((m) => m.whalesImpl),

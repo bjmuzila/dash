@@ -27146,3 +27146,21 @@ Brandon asked for the whale prints to have an OTM-or-all filter.
   - It dropped the ITM call, the ITM put, a no-spot put above the close and a print with no type.
   - All strikes kept all 8.
 - **Files:** `cbedge-v3/src/pages/vela/studies/flow.ts`, `studies/index.ts`.
+
+## 2026-10-10 - Vela Whale Prints: Price zone, a band from the bubble to the right
+
+Brandon asked for a small box running right from a whale bubble's high / low, shown on hover or switched on in the settings.
+
+- **Price zone** is a new setting on Whale Prints (last in the dialog):
+  - **On hover** (the default): the bubble under the pointer gets the band.
+  - **Every bubble:** all of them get one; the hovered one draws stronger. A bubble scrolled off the left keeps its band across the view.
+  - **Off.**
+- **The band:**
+  - It is as tall as the bubble (top to bottom), runs from its centre to the chart's right edge, and is in the bubble's colour (green bullish, red bearish, grey unknown).
+  - It is a faint fill between two thin edge lines, under the bubbles.
+  - It is drawn by the whale layer in pixels, so it stays the bubble's height at any zoom and follows every pan, and the hover card still opens on top.
+- The journal markers that share the whale layer draw no bands: no zone in the payload means none.
+- **Checks:**
+  - `tsc` strict is clean on `flow.ts`, `index.ts` and `whaleLayer.ts`.
+  - The layer was rendered in Chromium for all three settings (`generated/2026-10-10-whale-price-zone.png`).
+- **Files:** `cbedge-v3/src/pages/vela/studies/whaleLayer.ts`, `studies/flow.ts`, `studies/index.ts`.

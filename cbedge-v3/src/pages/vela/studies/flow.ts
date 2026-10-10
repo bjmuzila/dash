@@ -64,6 +64,12 @@
 //                  Hover for a short card of the prints. Drawn by a renderer
 //                  layer — whaleLayer.ts, which has the size table. Bubble
 //                  opacity % sets how solid the fill is (30 by default).
+//                  Price zone (2026-10-10, Brandon: "a small box extending from
+//                  the bubble high / low to the right"): a band as tall as the
+//                  bubble, from its centre to the chart's right edge, in its
+//                  colour — On hover (the default) for the bubble under the
+//                  pointer, Every bubble, or Off. Drawn by the layer in pixels,
+//                  so it stays the bubble's height at any zoom.
 //
 // ES charts read SPX's flow, NQ charts NDX's — the futures have no options here.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,7 +78,7 @@ import type { OHLCV, PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, FUT_OPEN, RTH_OPEN, barAt, bool, studyImpl, etDateKey, etMinutesOfDay, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
-import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_ACTION, WH_CAP, WH_EXP, WH_MIN, WH_MONEY, WH_OPACITY_DEF, WH_SIDE } from './index'
+import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_ACTION, WH_CAP, WH_EXP, WH_MIN, WH_MONEY, WH_OPACITY_DEF, WH_SIDE, WH_ZONE } from './index'
 import { gexBasis, gexBasisShort } from '@/pages/vela/gexBasis'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhaleContext, type WhaleCtxLine, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
@@ -711,6 +717,8 @@ interface WhS {
   exp: 'all' | '0dte' | 'week' | 'no0dte'
   /** Out-of-the-money prints only (the Strikes setting). */
   otm: boolean
+  /** The Price zone setting: a band from the bubble right, for the hovered bubble, every bubble, or none. */
+  zone: 'hover' | 'all' | 'off'
 }
 const WH_MIN_V = [1e6, 2e6, 5e6, 10e6]
 const WH_CAP_V = [25e6, 10e6, 50e6, 100e6]
@@ -1008,6 +1016,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
       text: bool(i.text, true),
       exp: (['all', '0dte', 'week', 'no0dte'] as const)[Math.max(0, (WH_EXP as readonly string[]).indexOf(str(i.exp, WH_EXP[0])))] ?? 'all',
       otm: str(i.money, WH_MONEY[0]) === WH_MONEY[1],
+      zone: ((z) => (z === WH_ZONE[1] ? 'all' : z === WH_ZONE[2] ? 'off' : 'hover'))(str(i.zone, WH_ZONE[0])),
     }
   },
   dataKey: (c, s) => `${flowTicker(c)}|${s.minPremium}|${s.days}`,
@@ -1067,7 +1076,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
   render: () => ({}),
   layer: (c, s, data): WhalePayload | null => {
     const bubbles = whaleBubbles(c, s, data)
-    return bubbles.length ? { bubbles, fill: s.fill } : null
+    return bubbles.length ? { bubbles, fill: s.fill, zone: s.zone } : null
   },
 })
 
