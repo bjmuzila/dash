@@ -68,7 +68,7 @@ import type { OHLCV, Vela } from '@luxalgo/vela'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { query } from '@/data/api'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
-import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
+import { recentBars5, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { loadBasis, wallSeriesFor } from '@/pages/vela/wallsIndicator'
 import { chainValue, flipOf, gexBasis, vtCoilOn } from '@/pages/vela/gexBasis'
 import { vtTermsFromWalls } from '@/pages/levelLog/wallData'
@@ -116,7 +116,6 @@ export interface Armed {
   armedAt: number
 }
 
-const provider = new CbEdgeProvider()
 const bare = (s: string | undefined) => (s ?? '').replace(/^[^:]*:/, '').trim().toUpperCase()
 
 // ── The levels ───────────────────────────────────────────────────────────────
@@ -139,7 +138,9 @@ const GEX_KEYS = new Set(['volt', 'coil', 'reversal', 'surge', 'flip'])
 async function readLevels(sym: string): Promise<LevelRead> {
   const r = resolveSym(sym)
   const fut = r.kind === 'futures'
-  const bars = await provider.getBars(sym, '5', { session: r.kind === 'index' ? 'regular' : 'extended' }).catch(() => [] as OHLCV[])
+  // A few sessions, not the chart's 30 (recentBars5): everything below reads
+  // today, the prior session and the overnight only.
+  const bars = await recentBars5(sym, r.kind === 'index' ? 'regular' : 'extended').catch(() => [] as OHLCV[])
   const price = bars.length ? bars[bars.length - 1]!.close : null
   const out: Level[] = []
   const today = bars.length ? etDateKey(bars[bars.length - 1]!.time) : etDateKey(Date.now())

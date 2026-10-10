@@ -87,7 +87,6 @@ import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/Cop
 import { VoltickWordmark } from '@/shell/Brand'
 import { ChipLogo } from './economicCalendar/ChipLogo'
 import {
-  BOARD,
   CHIP_GAP,
   ROW_LOGO,
   VT,

@@ -1296,7 +1296,9 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // CB Edge theme: CORE / CW / PW on the level palette with app-ground ink.
       // Voltick theme: Volt / Surge / Reversal / Coil, each on its reserved
       // fill with its own ink. Same chip, same margin, same 2dp.
-      const vt = levels.vt
+      // a const for the callback below: TS drops the `if (levels)` narrowing on a `let` inside a closure
+      const lv = levels
+      const vt = lv.vt
       const chips: Array<{ price: number | null; label: string; fill: string; ink: string }> = vt
         ? vtInk.map((d) => ({ price: vt[d.key], label: d.label, fill: d.fill, ink: d.ink }))
         : (
@@ -1305,7 +1307,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
               ['cw', 'CW'],
               ['pw', 'PW'],
             ] as Array<[keyof typeof levelInk, string]>
-          ).map(([key, label]) => ({ price: levels[key], label, fill: levelInk[key], ink: appInk }))
+          ).map(([key, label]) => ({ price: lv[key], label, fill: levelInk[key], ink: appInk }))
       for (const chip of chips) {
         const price = chip.price
         if (price == null || !(price > 0)) continue

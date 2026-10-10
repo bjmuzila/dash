@@ -636,8 +636,24 @@ register('/api/insights/gex', {
 // live=0) is already instant and is not cached.
 const CHAINS_FRESH_MS = 20_000;
 const CHAINS_MAX_STALE_MS = 10 * 60_000;
-const CHAINS_WARM_MS = 15 * 60_000;
+// 2026-10-09 audit ("300 users"): 15 min → 5 min, and at most CHAINS_WARM_MAX
+// refreshes per pass, newest ask first. Each warm key is a TastyTrade pull every
+// 20 s whether or not anyone is still looking; with many users' watchlists that
+// is hundreds of tickers. A key asked within the window stays as fresh as
+// before; one asked longer ago is still served (SWR, up to CHAINS_MAX_STALE_MS)
+// and refreshes on that ask.
+const CHAINS_WARM_MS = Number(process.env.CHAINS_WARM_MS || 5 * 60_000);
+const CHAINS_WARM_MAX = Number(process.env.CHAINS_WARM_MAX || 40);
+const CHAINS_MAX_KEYS = 400;
 const CHAINS_CACHE = new Map(); // key → { at, status, text, lastAsk, ctx, refreshing }
+// Only these change what /proxy/api/tt/chains answers (it reads `expiration`
+// and `live`; front/slim are applied here). Everything else — `range`, a cache
+// buster — used to make a separate key, a separate warm loop and separate pulls.
+const CHAINS_KEY_PARAMS = ['expiration', 'live', 'front', 'slim'];
+// One upstream pull per (ticker, expiration), shared by every variant of it
+// (front/slim/full) that refreshes within CHAINS_RAW_REUSE_MS.
+const CHAINS_RAW_REUSE_MS = 5_000;
+const CHAINS_RAW = new Map(); // `TICKER|expiration` → { at, p }
 // Upstream pulls since boot, for /healthz — a refresh that keeps failing is
 // invisible from outside, because SWR keeps serving the last good snapshot.
 const CHAINS_STATS = { pulls: 0, fails: 0, lastFailAt: 0, lastFailStatus: 0, lastFailError: '', lastFailTicker: '' };
@@ -678,9 +694,31 @@ function chainsTrim(text, front, slim) {
   d.items = items;
   return JSON.stringify(json);
 }
+function chainsRaw(ctx, ticker, expiration) {
+  const k = `${String(ticker).toUpperCase()}|${expiration || ''}`;
+  const now = Date.now();
+  const hit = CHAINS_RAW.get(k);
+  if (hit && (hit.at === 0 || now - hit.at < CHAINS_RAW_REUSE_MS)) return hit.p;
+  const entry = { at: 0, p: null };
+  const qs = new URLSearchParams();
+  if (expiration) qs.set('expiration', expiration);
+  qs.set('live', '0');
+  entry.p = ctx.internalFetch(`/proxy/api/tt/chains/${encodeURIComponent(ticker)}?${qs}`, { cache: 'no-store' })
+    .then(async (r) => ({ status: r.status, raw: await r.text() }))
+    .finally(() => { entry.at = Date.now(); });
+  CHAINS_RAW.set(k, entry);
+  if (CHAINS_RAW.size > 500) {
+    for (const [kk, e] of CHAINS_RAW) if (e.at && now - e.at > 60_000) CHAINS_RAW.delete(kk);
+  }
+  return entry.p;
+}
 async function chainsPull(ctx, ticker, sp) {
   const front = sp.get('front') === '1';
   const slim = sp.get('slim') === '1';
+  if (sp.get('live') === '0') {
+    const { status, raw } = await chainsRaw(ctx, ticker, sp.get('expiration') || '');
+    return { status, text: status === 200 ? chainsTrim(raw, front, slim) : raw };
+  }
   const up = new URLSearchParams(sp);
   up.delete('front'); up.delete('slim');
   const qs = up.toString();
@@ -712,17 +750,25 @@ function chainsRefresh(key, ticker, sp, ctx) {
 }
 setInterval(() => {
   const now = Date.now();
+  const due = [];
   for (const [key, e] of CHAINS_CACHE) {
     if (now - e.lastAsk > CHAINS_WARM_MS) {
       if (now - e.at > CHAINS_MAX_STALE_MS && !e.refreshing) CHAINS_CACHE.delete(key);
       continue;
     }
-    if (!e.refreshing && now - e.at > CHAINS_FRESH_MS && e.ctx) {
-      const sp = new URLSearchParams(key);
-      const ticker = sp.get('ticker') || 'SPX';
-      sp.delete('ticker');
-      chainsRefresh(key, ticker, sp, e.ctx).catch(() => {});
-    }
+    if (!e.refreshing && now - e.at > CHAINS_FRESH_MS && e.ctx) due.push([key, e]);
+  }
+  due.sort((a, b) => b[1].lastAsk - a[1].lastAsk);
+  for (const [key, e] of due.slice(0, CHAINS_WARM_MAX)) {
+    const sp = new URLSearchParams(key);
+    const ticker = sp.get('ticker') || 'SPX';
+    sp.delete('ticker');
+    chainsRefresh(key, ticker, sp, e.ctx).catch(() => {});
+  }
+  // Bound the map: drop the keys asked longest ago.
+  if (CHAINS_CACHE.size > CHAINS_MAX_KEYS) {
+    const byAsk = [...CHAINS_CACHE.entries()].filter(([, e]) => !e.refreshing).sort((a, b) => a[1].lastAsk - b[1].lastAsk);
+    for (const [key] of byAsk.slice(0, CHAINS_CACHE.size - CHAINS_MAX_KEYS)) CHAINS_CACHE.delete(key);
   }
 }, 15_000).unref?.();
 healthProbe('chains', () => {
@@ -764,7 +810,8 @@ register('/api/chains', {
       const r = await chainsPull(ctx, ticker, sp);
       return send(res, r.status, r.text, { 'Cache-Control': CACHE_30 });
     }
-    const keyParams = new URLSearchParams(sp);
+    const keyParams = new URLSearchParams();
+    for (const k of CHAINS_KEY_PARAMS) { const v = sp.get(k); if (v != null && v !== '') keyParams.set(k, v); }
     keyParams.set('ticker', ticker.toUpperCase());
     keyParams.sort();
     const key = keyParams.toString();
@@ -6044,9 +6091,31 @@ if (libDb) {
         const pages = [...new Set(String(sp.get('pages') || '').split(',').map((p) => cleanLayoutPage(p.trim())).filter(Boolean))];
         if (!pages.length || pages.length > 12) return send(res, 400, { error: 'pages must list 1–12 page keys' });
         try {
-          const lists = await Promise.all(pages.map((p) => libDb.getPagePresets(userId, p)));
+          // ONE query for every page (2026-10-09 audit): this used to be one
+          // query per page, all at once, into the shared pool — up to 12
+          // connections for a single page load, times every user loading at the
+          // open. Same rows, same order and same mapping as getPagePresets().
           const out = {};
-          pages.forEach((p, i) => { out[p] = lists[i].filter((r) => r.preset); });
+          for (const p of pages) out[p] = [];
+          if (typeof libDb.pgQuery === 'function') {
+            const r = await libDb.pgQuery(
+              `SELECT page, name, layout, is_default, updated_at
+                 FROM dashboard_layouts
+                WHERE clerk_user_id = $1 AND page = ANY($2::text[])
+                ORDER BY page, is_default DESC, updated_at DESC NULLS LAST, name ASC`,
+              [userId, pages],
+            );
+            for (const row of r.rows || []) {
+              let v = row.layout;
+              if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
+              const preset = v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+              if (!preset || !out[row.page]) continue;
+              out[row.page].push({ name: row.name, preset, isDefault: Boolean(row.is_default), updatedAt: row.updated_at ?? null });
+            }
+          } else {
+            const lists = await Promise.all(pages.map((p) => libDb.getPagePresets(userId, p)));
+            pages.forEach((p, i) => { out[p] = lists[i].filter((r) => r.preset); });
+          }
           return send(res, 200, { pages: out }, { 'Cache-Control': 'private, no-store' });
         } catch (err) {
           return send(res, 500, { error: 'Load failed', detail: String(err) });
@@ -15121,6 +15190,15 @@ try {
   if (registerVelaAlertRoutes({ register, send, readJson, libDb })) console.log('[api-router] vela alerts route registered');
 } catch (e) {
   console.warn('[api-router] vela alerts route not loaded:', e.message);
+}
+// /api/owner/uptime — CB Edge + Vela uptime from UptimeRobot (outside-in),
+// key UPTIMEROBOT_API_KEY in .env.local (split by URL). Owner page:
+// owner.cbedge.net → System → Uptime. See server-v2/uptime-robot.cjs.
+try {
+  const { registerUptimeRoutes } = require('./uptime-robot.cjs');
+  if (registerUptimeRoutes({ register, send, NO_STORE })) console.log('[api-router] uptime route registered');
+} catch (e) {
+  console.warn('[api-router] uptime route not loaded:', e.message);
 }
 
 // ---------------------------------------------------------------------------

@@ -336,6 +336,23 @@ const {
   ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
   setAlertEnabled: setSignalAlertEnabled,
 } = require('./signals-engine');
+
+// /proxy/signals shared read — see the route. kind -> { at, p }
+const SIGNALS_SHARE_MS = Number(process.env.SIGNALS_SHARE_MS || 5000);
+const _signalsShared = new Map();
+function sharedSignalRows({ limit = 50, since = 0, kind = '' } = {}) {
+  const key = String(kind || '');
+  const now = Date.now();
+  let hit = _signalsShared.get(key);
+  if (!hit || now - hit.at > SIGNALS_SHARE_MS) {
+    hit = { at: now, p: Promise.resolve(getSignalRows({ limit: 200, since: 0, kind: key })).catch(() => []) };
+    _signalsShared.set(key, hit);
+    if (_signalsShared.size > 50) _signalsShared.delete(_signalsShared.keys().next().value);
+  }
+  const n = Math.min(200, Math.max(1, Number(limit) || 50));
+  const floor = Number(since) || 0;
+  return hit.p.then((rows) => (floor > 0 ? rows.filter((r) => Number(r.ts) >= floor) : rows).slice(0, n));
+}
 // Runtime-editable layer over the CB Edge ticker rosters (scanner / em / far-cb).
 // Baselines still live in scanner-tickers.js, em-tickers.js and far-cb-tickers.js;
 // this adds a roster_overrides table on top so the owner Watchlists page can add,
@@ -5351,6 +5368,14 @@ async function main() {
       }
 
       // GET /proxy/signals?limit=50&since=<ms>&kind=<kind>
+      //
+      // SHARED READ (2026-10-09 audit, "300 users"). Every Vela chart's Events
+      // study and the toolbar feed ask this every minute, each one a query on the
+      // signals engine's own small pool. One newest-200 read per `kind` is now
+      // held SIGNALS_SHARE_MS and every caller is served from it: `since` and
+      // `limit` are applied to that list, which gives exactly the rows the query
+      // would (newest-first, so the newest 200 filtered by ts >= since IS the
+      // newest ≤200 with ts >= since).
       // Recent actionable GEX/CB signals (newest first) for the ES Candles
       // Signals panel and the trading bot. Alerts-only; never places orders.
       if (pathname === '/proxy/signals' && req.method === 'GET') {
@@ -5360,7 +5385,7 @@ async function main() {
             const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
             const since = Number(u.searchParams.get('since') || 0) || 0;
             const kind  = u.searchParams.get('kind') || '';
-            const rows = await getSignalRows({ limit, since, kind });
+            const rows = await sharedSignalRows({ limit, since, kind });
             sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();

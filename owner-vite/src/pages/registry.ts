@@ -46,6 +46,8 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   VelaUsage: lazy(() => import("./VelaUsage")),
   // The box behind Vela, one screen: GET /api/healthz (server-v2/healthz.cjs).
   VelaHealth: lazy(() => import("./VelaHealth")),
+  // CB Edge + Vela uptime, outside-in: GET /api/owner/uptime (server-v2/uptime-robot.cjs).
+  Uptime: lazy(() => import("./Uptime")),
   ChartsUI: lazy(() => import("./ChartsUI")),
   Watchlists: lazy(() => import("./Watchlists")),
   GexGrowth: lazy(() => import("./GexGrowth")),

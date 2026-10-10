@@ -205,7 +205,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                       <span
                         aria-hidden
                         className="shrink-0 text-2xs font-bold leading-none"
-                        style={{ color: biasColor }}
+                        style={{ color: biasColor ?? undefined }}
                       >
                         {bias === 'bullish' ? '▲' : '▼'}
                       </span>

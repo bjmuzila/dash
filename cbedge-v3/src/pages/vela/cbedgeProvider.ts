@@ -366,6 +366,34 @@ function historyUrl(sym: ResolvedSym, native: 1 | 5): string {
  */
 export const DEFAULT_HISTORY_URL = historyUrl({ key: 'SPX', kind: 'index' }, 5)
 
+// ── Recent bars, for level reads ─────────────────────────────────────────────
+// Level reads (levels/levelAlerts.ts: Volt Watch, the legend's LEVELS row, armed
+// alerts) look at today, the prior session and the overnight — never further
+// back. They used to go through getBars(), i.e. the chart's 30-session tape:
+// Volt Watch re-read it for up to 40 tickers every minute, 100–170 kB each, about
+// 5 MB a minute per open tab (2026-10-09 audit, "300 users"). This is the same
+// tape cut to a few sessions, shared on its own longer clock. Stocks and ETFs
+// count `days` in sessions; the futures route counts calendar days, so it gets
+// one more to keep a Monday's Friday-evening overnight in reach.
+const LEVEL_SESSIONS = 4
+const LEVEL_FUT_DAYS = 5
+/** Long enough that a 60 s Volt Watch round re-reads every other round, not every round. */
+export const LEVEL_BARS_STALE_MS = 110_000
+
+/** The last few sessions of 5-minute bars for `ticker`, session-filtered like getBars. */
+export async function recentBars5(ticker: string, session: string | undefined, staleMs = LEVEL_BARS_STALE_MS): Promise<OHLCV[]> {
+  const sym = resolveSym(ticker)
+  const url = sym.fut
+    ? esCandlesUrl(5, LEVEL_FUT_DAYS, sym.fut)
+    : `${candlesUrl(symbolDef(sym.key), 5, LEVEL_SESSIONS)}&limit=${ETF_ROW_LIMIT}`
+  const json = await query<unknown>(url, { staleMs })
+  const tape = sym.fut ? parseEsCandles(json) : parseCandles(json)
+  const newest = tape[tape.length - 1]
+  if (newest) noteFeed(sym.key, newest.t, newest.c, false)
+  // No seed write: the chart's forming-bar seed belongs to the chart's own load.
+  return aggregate(sessionFilter(tape, session), bucketFor(parseTf('5'), !!sym.fut))
+}
+
 async function nativeBars(sym: ResolvedSym, native: 1 | 5, staleMs = HISTORY_STALE_MS): Promise<Bar[]> {
   const json = await query<unknown>(historyUrl(sym, native), { staleMs })
   return sym.fut ? parseEsCandles(json) : parseCandles(json)

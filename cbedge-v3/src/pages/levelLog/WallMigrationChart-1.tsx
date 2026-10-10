@@ -110,6 +110,9 @@ const LEVEL_LABEL: Record<WallLevel, string> = {
   call_wall: 'Call Wall',
   put_wall: 'Put Wall',
   cb: 'CORE',
+  volt: '★ Volt',
+  coil: '◆ Coil',
+  reversal: '↘ Reversal',
 }
 
 /**
@@ -122,6 +125,10 @@ const LEVEL_COLOR: Record<WallLevel, string> = {
   call_wall: ES_CANDLE_UP,
   put_wall: LEVEL_COLORS.pw,
   cb: LEVEL_COLORS.cb,
+  // same as WallMigrationChart.tsx: each Voltick level's reserved token
+  volt: 'var(--color-vt-volt)',
+  coil: 'var(--color-vt-coil)',
+  reversal: 'var(--color-vt-reversal)',
 }
 
 /** Which wall a role-model line IS at a given slot. */

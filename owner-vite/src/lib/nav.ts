@@ -119,6 +119,8 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "AI Connections", href: "/owner/ai-connections", glyph: "✦", key: "AiConnections" },
       { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
       { label: "Postgres", href: "/owner/db-map", glyph: "⛃", key: "DbMap" },
+      // CB Edge + Vela uptime from UptimeRobot (server-v2/uptime-robot.cjs).
+      { label: "Uptime", href: "/owner/uptime", glyph: "◔", key: "Uptime" },
       { label: "Media Dump", href: "/owner/media-dump", glyph: "🖼︎", key: "MediaDump" },
       // sites.cbedge.net — password-protected website previews for clients.
       { label: "Client Sites", href: "/owner/client-sites", glyph: "◫", key: "ClientSites" },

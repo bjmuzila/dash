@@ -393,8 +393,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   const WS_AUTH_REQUIRED = process.env.WS_AUTH_REQUIRED === '1';
   let verifyWsRequest = null;
   let sessionStillLive = null;
+  let sessionsStillLive = null;
   if (WS_AUTH_REQUIRED) {
-    try { ({ verifyWsRequest, sessionStillLive } = require('./ws-auth')); }
+    try { ({ verifyWsRequest, sessionStillLive, sessionsStillLive } = require('./ws-auth')); }
     catch (e) { log.log?.('[WS] ws-auth module failed to load — auth DISABLED:', e?.message); }
   }
 
@@ -698,17 +699,37 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   // 1008 = policy violation. The client's reconnect loop re-runs the upgrade
   // gate and is rejected there with a 401, which is where it belongs — rather
   // than this handler trying to explain itself over a socket it is closing.
-  const revalidator = WS_AUTH_REQUIRED && sessionStillLive
+  //
+  // BATCHED since 2026-10-09: one `token_hash = ANY(...)` query per sweep
+  // (ws-auth sessionsStillLive) instead of one query per socket fired in the same
+  // instant — at 300 sockets that burst queued the Vela gate and every upgrade
+  // behind it on the shared auth pool. The single-socket path is the fallback if
+  // ws-auth is ever an older build without the batch export.
+  const closeEnded = (ws) => {
+    const s = ws.cbSession;
+    log.log?.(`[WS] closing socket — session no longer valid (user ${s?.userId || '?'})`);
+    try { ws.close(1008, 'session ended'); } catch { /* noop */ }
+  };
+  const revalidator = WS_AUTH_REQUIRED && (sessionsStillLive || sessionStillLive)
     ? setInterval(() => {
+        const socks = [];
         for (const ws of wss.clients) {
           const s = ws.cbSession;
-          if (!s || !s.tokenHash) continue;
-          Promise.resolve(sessionStillLive(s.tokenHash, { host: s.host }))
-            .then((live) => {
-              if (live) return;
-              log.log?.(`[WS] closing socket — session no longer valid (user ${s.userId || '?'})`);
-              try { ws.close(1008, 'session ended'); } catch { /* noop */ }
+          if (s && s.tokenHash) socks.push(ws);
+        }
+        if (!socks.length) return;
+        if (sessionsStillLive) {
+          Promise.resolve(sessionsStillLive(socks.map((ws) => ({ tokenHash: ws.cbSession.tokenHash, host: ws.cbSession.host }))))
+            .then((keep) => {
+              socks.forEach((ws, i) => { if (keep[i] === false) closeEnded(ws); });
             })
+            .catch(() => { /* fail open — next sweep tries again */ });
+          return;
+        }
+        for (const ws of socks) {
+          const s = ws.cbSession;
+          Promise.resolve(sessionStillLive(s.tokenHash, { host: s.host }))
+            .then((live) => { if (!live) closeEnded(ws); })
             .catch(() => { /* fail open — next sweep tries again */ });
         }
       }, 60000)
@@ -762,8 +783,27 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   return { wss, close, broadcastEvent };
 }
 
+// BACKPRESSURE (2026-10-09 audit, "300 users"). Every frame to every socket
+// goes through here, and nothing used to look at whether the client was reading:
+// a phone on bad Wi-Fi, a laptop that slept with the tab open, a stalled proxy —
+// the socket stays "open" while ws queues every frame in this process's memory.
+// Past WS_MAX_BUFFERED_BYTES unsent (4 MB: minutes of a scoped feed, ~20 connect
+// snapshots) the client is not keeping up and never will; it is cut, and its own
+// reconnect loop brings it back on a fresh snapshot — the path every client
+// already takes after a deploy.
+const WS_MAX_BUFFERED_BYTES = Number(process.env.WS_MAX_BUFFERED_BYTES || 4 * 1024 * 1024);
+let _slowCut = 0;
 function safeSend(ws, data) {
   if (ws.readyState === WebSocket.OPEN) {
+    if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
+      if (!ws._cbSlowCut) {
+        ws._cbSlowCut = true;
+        _slowCut += 1;
+        console.warn(`[WS] cutting a slow client — ${(ws.bufferedAmount / 1048576).toFixed(1)} MB unsent (user ${ws.cbSession?.userId || '?'}; ${_slowCut} cut since boot)`);
+        try { ws.terminate(); } catch { /* already gone */ }
+      }
+      return;
+    }
     try {
       ws.send(data);
     } catch {

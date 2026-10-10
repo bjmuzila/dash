@@ -595,6 +595,90 @@ async function sessionStillLive(tokenHash, opts = {}) {
   }
 }
 
+/**
+ * sessionStillLive() for MANY sockets in one round trip (2026-10-09 audit,
+ * "300 users"). The once-a-minute sweep used to call sessionStillLive() per
+ * socket, all in the same instant: at 300 open sockets that is 300 queries in a
+ * burst on the auth pool — the same 16-connection pool the Vela gate and every
+ * WS upgrade wait on. This is the identical query with `= ANY($1)`, so the
+ * decision per row is exactly the one above.
+ *
+ * `items`: [{ tokenHash, host }], one per socket. Returns boolean[] in the
+ * same order — true = keep. Per SOCKET, not per token, because a beta grant only
+ * holds on the Vela host: the same login can be kept on vela.cbedge.net and
+ * closed on cbedge.net. Fails OPEN like the single form: on any error every
+ * socket is kept and the next sweep tries again.
+ */
+async function sessionsStillLive(items) {
+  const list = Array.isArray(items) ? items : [];
+  const keep = list.map(() => true);
+  // per token: 'ok' (entitled anywhere), 'beta' (only on the Vela host, with a
+  // live grant), 'no' (gone or not entitled)
+  const verdict = new Map();
+  const hashes = [...new Set(list.filter((x) => x && x.tokenHash).map((x) => x.tokenHash))];
+  if (!hashes.length) return keep;
+  const pool = getAuthPool();
+  if (!pool) return keep;
+  try {
+    await ensureMembers(pool);
+    const CHUNK = 1000;
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const slice = hashes.slice(i, i + CHUNK);
+      // eslint-disable-next-line no-await-in-loop
+      const r = await pool.query(
+        `SELECT s.token_hash, s.user_id, u.is_owner,
+                (ma.email IS NOT NULL
+                  OR ca.email IS NOT NULL
+                  OR va.email IS NOT NULL)                     AS is_paid,
+                (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
+           FROM sessions s
+           JOIN users u ON u.id = s.user_id
+           LEFT JOIN member_access ma
+                  ON ma.email = LOWER(u.email)
+                 AND ma.revoked_at IS NULL
+                 AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
+           LEFT JOIN comp_access ca
+                  ON ca.email = LOWER(u.email)
+                 AND ca.revoked_at IS NULL
+                 AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+           LEFT JOIN voltick_access va
+                  ON va.email = LOWER(u.email)
+                 AND va.revoked_at IS NULL
+                 AND (va.expires_at IS NULL OR va.expires_at > NOW())
+          WHERE s.token_hash = ANY($1::text[]) AND s.expires_at > NOW()`,
+        [slice]
+      );
+      const rows = new Map();
+      for (const row of r.rows || []) if (!rows.has(row.token_hash)) rows.set(row.token_hash, row);
+      for (const h of slice) {
+        const row = rows.get(h);
+        if (!row) { verdict.set(h, 'no'); continue; } // signed out, or kicked
+        const ok = getAccessFor({
+          userId: row.user_id,
+          isOwner: !!row.is_owner,
+          isPaid: !!row.is_paid,
+          isComped: !!row.is_comped,
+        }).ok;
+        if (ok) { verdict.set(h, 'ok'); continue; }
+        // only asked when one of this token's sockets is on the Vela host
+        const onVela = list.some((x) => x && x.tokenHash === h && x.host && isVelaHost(x.host));
+        // eslint-disable-next-line no-await-in-loop
+        verdict.set(h, onVela && (await isVelaBetaUser(row.user_id)) ? 'beta' : 'no');
+      }
+    }
+  } catch (e) {
+    console.warn('[ws-auth] batch revalidate failed (keeping sockets):', e?.message || e);
+    return list.map(() => true);
+  }
+  return list.map((x) => {
+    if (!x || !x.tokenHash) return true; // nothing to check against — leave it alone
+    const v = verdict.get(x.tokenHash);
+    if (v === 'no') return false;
+    if (v === 'beta') return !!(x.host && isVelaHost(x.host));
+    return true;
+  });
+}
+
 /** Same decision, keyed directly on a userId (no session token) — exported
  *  for unit testing, mirrors lib/subscription.ts's getAccessForUser. */
 async function getAccessForUser(userId) {
@@ -648,6 +732,7 @@ const isTransientAuthFailure = (access) =>
 module.exports = {
   verifyWsRequest,
   sessionStillLive,
+  sessionsStillLive,
   getAccessForUser,
   invalidateSessionCache,
   isTransientAuthFailure,
