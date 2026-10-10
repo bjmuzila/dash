@@ -166,11 +166,18 @@ async function readSignals(): Promise<void> {
   }
 }
 
+/**
+ * A `fresh` ask still takes an answer this recent (2026-10-10, audit "300 users"):
+ * every chart's Events study asks fresh on its own 60 s timer, so four charts
+ * meant four /proxy/signals reads a minute where one answers them all.
+ */
+const FRESH_FLOOR_MS = 20_000
+
 /** Read whatever is due (both on `fresh`); resolves when done. Shared by every chart. */
 export async function refreshEventFeeds(fresh: boolean): Promise<number> {
   const now = Date.now()
-  if (fresh || now - econAt >= ECON_MS) econBusy ??= readEcon().finally(() => (econBusy = null))
-  if (fresh || now - signalsAt >= SIGNAL_MS) signalsBusy ??= readSignals().finally(() => (signalsBusy = null))
+  if ((fresh && now - econAt >= FRESH_FLOOR_MS) || now - econAt >= ECON_MS) econBusy ??= readEcon().finally(() => (econBusy = null))
+  if ((fresh && now - signalsAt >= FRESH_FLOOR_MS) || now - signalsAt >= SIGNAL_MS) signalsBusy ??= readSignals().finally(() => (signalsBusy = null))
   await Promise.all([econBusy, signalsBusy])
   return version
 }

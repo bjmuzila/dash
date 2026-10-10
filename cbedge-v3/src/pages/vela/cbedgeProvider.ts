@@ -394,9 +394,183 @@ export async function recentBars5(ticker: string, session: string | undefined, s
   return aggregate(sessionFilter(tape, session), bucketFor(parseTf('5'), !!sym.fut))
 }
 
+// ── Shared live streams (2026-10-10) ─────────────────────────────────────────
+// ONE EventSource per stream URL per tab, however many charts show the symbol.
+// Each chart used to open its own, so a layout with SPX on 1m, 5m and 15m held
+// three identical streams (three server connections through Cloudflare and nginx,
+// three copies of every frame). Charts attach and detach; the stream opens with
+// the first and closes with the last — so a hidden tab, where every chart
+// detaches, still lets the server release the symbol. The hub owns what used to
+// be per-chart: the reopen with backoff after the browser gives up on a stream
+// (CLOSED after a non-200 — a deploy's 502, a 401), and telling every attached
+// chart when a reopened stream is back so each heals its own timeframe.
+interface StreamListener {
+  msg: (data: unknown) => void
+  reopened: () => void
+}
+interface SharedStream {
+  url: string
+  listeners: Set<StreamListener>
+  es: EventSource | null
+  reopenId: ReturnType<typeof setTimeout> | null
+  delay: number
+  reopened: boolean
+  last: unknown
+  openedAt: number
+}
+const streams = new Map<string, SharedStream>()
+
+function streamOpen(e: SharedStream): void {
+  if (e.es || !e.listeners.size || document.hidden) return
+  const es = new EventSource(e.url)
+  e.es = es
+  e.openedAt = Date.now()
+  // onopen = the server answered 200: a restart is over. A quiet symbol may not
+  // send a frame for minutes, so the heal is signalled here, not on a message.
+  es.onopen = () => {
+    e.delay = REOPEN_MIN_MS
+    if (e.reopened) {
+      e.reopened = false
+      for (const l of [...e.listeners]) l.reopened()
+    }
+  }
+  es.onmessage = (ev) => {
+    let data: unknown
+    try {
+      data = JSON.parse(ev.data as string)
+    } catch {
+      return // a malformed frame is not a reason to tear down a working stream
+    }
+    e.last = data
+    for (const l of [...e.listeners]) {
+      try {
+        l.msg(data)
+      } catch {
+        /* one chart's handler failing must not starve the others */
+      }
+    }
+  }
+  // CONNECTING = the browser retrying by itself (the route sends `retry: 3000`).
+  // Only CLOSED — the browser has given up — needs a reopen.
+  es.onerror = () => {
+    if (e.es !== es || es.readyState !== EventSource.CLOSED) return
+    e.es = null
+    if (e.reopenId) clearTimeout(e.reopenId)
+    e.reopenId = setTimeout(() => {
+      e.reopenId = null
+      e.reopened = true
+      streamOpen(e)
+    }, e.delay)
+    e.delay = Math.min(e.delay * 2, REOPEN_MAX_MS)
+  }
+}
+
+function streamClose(e: SharedStream): void {
+  e.es?.close()
+  e.es = null
+  if (e.reopenId) {
+    clearTimeout(e.reopenId)
+    e.reopenId = null
+  }
+}
+
+/** Attach to `url`'s shared stream; returns the detach. */
+function streamAttach(url: string, l: StreamListener): () => void {
+  let e = streams.get(url)
+  if (!e) {
+    e = { url, listeners: new Set(), es: null, reopenId: null, delay: REOPEN_MIN_MS, reopened: false, last: null, openedAt: 0 }
+    streams.set(url, e)
+  }
+  const entry = e
+  entry.listeners.add(l)
+  // A chart joining a stream that is already open does not get the server's
+  // connect frame; hand it the newest one so it draws without waiting a tick.
+  if (entry.es && entry.last != null) {
+    const last = entry.last
+    queueMicrotask(() => {
+      if (entry.listeners.has(l)) l.msg(last)
+    })
+  }
+  streamOpen(entry)
+  return () => {
+    entry.listeners.delete(l)
+    if (!entry.listeners.size) {
+      streamClose(entry)
+      entry.last = null
+      streams.delete(url)
+    }
+  }
+}
+
+/** After a sleep / network change: reopen a possibly half-open stream — once, however many charts ask. */
+function streamKick(url: string): void {
+  const e = streams.get(url)
+  if (!e || Date.now() - e.openedAt < 2_000) return
+  streamClose(e)
+  streamOpen(e)
+}
+
+// ── The tape, re-read from its newest session only (2026-10-10) ──────────────
+// Every re-read of a chart's history (a symbol switch back after 20 s, the
+// catch-up after a hidden tab, the advanced watchlist's 2-minute stats for up
+// to 80 symbols) pulled the WHOLE window again: 30 sessions of 5m, 100–170 kB a
+// symbol, of which only the newest session can have changed. Now the first read
+// of a window is kept; later reads within TAPE_KEEP_MS fetch the newest session
+// alone and lay it over the kept copy (mergeTail). The full window is re-read on
+// a new ET day, after TAPE_KEEP_MS, or whenever the short read comes back empty
+// or does not overlap — so a bad short read can never leave a hole.
+const TAPE_KEEP_MS = 30 * 60_000
+const TAPE_MAX = 120
+const tapes = new Map<string, { day: string; fullAt: number; at: number; bars: Bar[] }>()
+
+function tailUrl(sym: ResolvedSym, native: 1 | 5): string {
+  if (sym.fut) return esCandlesUrl(native, 1, sym.fut)
+  return `${candlesUrl(symbolDef(sym.key), native, 1)}&limit=${ETF_ROW_LIMIT}`
+}
+
+/** `base` up to (not including) `tail`'s first bar, then `tail`. Both oldest-first. */
+export function mergeTail<T extends { t: number }>(base: readonly T[], tail: readonly T[]): T[] {
+  if (!tail.length) return base.slice()
+  const first = tail[0]!.t
+  const out: T[] = []
+  for (const b of base) {
+    if (b.t >= first) break
+    out.push(b)
+  }
+  return out.concat(tail)
+}
+
 async function nativeBars(sym: ResolvedSym, native: 1 | 5, staleMs = HISTORY_STALE_MS): Promise<Bar[]> {
-  const json = await query<unknown>(historyUrl(sym, native), { staleMs })
-  return sym.fut ? parseEsCandles(json) : parseCandles(json)
+  const url = historyUrl(sym, native)
+  const parse = (json: unknown) => (sym.fut ? parseEsCandles(json) : parseCandles(json))
+  const now = Date.now()
+  const day = etDateKey(now)
+  const kept = tapes.get(url)
+  if (kept && kept.day === day && now - kept.fullAt < TAPE_KEEP_MS && kept.bars.length) {
+    // as fresh as the caller asked for: what a query() cache hit would have given
+    if (now - kept.at < staleMs) return kept.bars
+    try {
+      const tail = parse(await query<unknown>(tailUrl(sym, native), { staleMs }))
+      // Only a tail that OVERLAPS the kept copy is laid over it: it must start
+      // inside the kept window (at or before its last bar). A tail that starts
+      // after it — a new session began since the full read — could leave a gap,
+      // so that case takes the full read below instead.
+      if (tail.length && tail[0]!.t > kept.bars[0]!.t && tail[0]!.t <= kept.bars[kept.bars.length - 1]!.t) {
+        kept.bars = mergeTail(kept.bars, tail)
+        kept.at = now
+        return kept.bars
+      }
+    } catch {
+      /* fall through to the full read */
+    }
+  }
+  const bars = parse(await query<unknown>(url, { staleMs }))
+  if (bars.length) {
+    tapes.delete(url)
+    tapes.set(url, { day, fullAt: now, at: now, bars })
+    if (tapes.size > TAPE_MAX) tapes.delete(tapes.keys().next().value!)
+  }
+  return bars
 }
 
 // ── The feed's own last price, per ticker ────────────────────────────────────
@@ -1097,7 +1271,6 @@ export class CbEdgeProvider implements DataProvider {
     // detect whether SSE works — if frames arrive the poll never runs.
     const def = symbolDef(sym.key)
     const pollUrl = liveCandleUrl(def)
-    let es: EventSource | null = null
     let pollId: ReturnType<typeof setInterval> | null = null
     let lastStreamAt = 0
     let hiddenAt = 0
@@ -1113,69 +1286,35 @@ export class CbEdgeProvider implements DataProvider {
       }
     }
 
-    // A browser closes an EventSource FOR GOOD when a reconnect gets a non-200
-    // answer — the 502 while the dashboard restarts on a deploy, or a 401.
-    // Before 2026-10-09 nothing reopened it, so after any restart every cash
-    // chart sat on the poll (which was itself 501ing) until the tab was hidden
-    // and shown again. Now a CLOSED stream is reopened with backoff, and the
-    // minutes it missed are healed with catchUp() once it is back.
-    let reopenId: ReturnType<typeof setTimeout> | null = null
-    let reopenDelay = REOPEN_MIN_MS
-    let reopened = false
-
-    const openStream = () => {
-      if (stopped || es || document.hidden) return
-      const stream = new EventSource(liveStreamUrl(def))
-      es = stream
-      // onopen = the server answered 200: the restart is over. A quiet symbol
-      // (an index overnight) may not send a data frame for minutes, so the
-      // heal runs here rather than on the first message.
-      stream.onopen = () => {
-        reopenDelay = REOPEN_MIN_MS
-        if (reopened) {
-          reopened = false
-          void catchUp()
-        }
-      }
-      stream.onmessage = (ev) => {
-        try {
-          lastStreamAt = Date.now()
-          for (const m of liveRows(JSON.parse(ev.data as string), def.key)) push(m)
-        } catch {
-          /* a malformed frame is not a reason to tear down a working stream */
-        }
-      }
-      // While readyState is CONNECTING the browser is retrying by itself (the
-      // route sends `retry: 3000`) and the poll covers the gap. Only CLOSED —
-      // the browser has given up — needs us.
-      stream.onerror = () => {
-        if (stopped || es !== stream || stream.readyState !== EventSource.CLOSED) return
-        es = null
-        if (reopenId) clearTimeout(reopenId)
-        reopenId = setTimeout(() => {
-          reopenId = null
-          reopened = true
-          openStream()
-        }, reopenDelay)
-        reopenDelay = Math.min(reopenDelay * 2, REOPEN_MAX_MS)
-      }
-    }
+    // The stream itself is the shared hub's (streamAttach above): one per symbol
+    // per tab, reopened with backoff when the browser gives up on it. This chart
+    // only listens, keeps its own fallback poll, and heals its own timeframe
+    // when the hub says a dropped stream is back.
+    const streamUrl = liveStreamUrl(def)
+    let detach: (() => void) | null = null
 
     const start = () => {
       if (stopped) return
-      openStream()
+      if (!detach && !document.hidden) {
+        detach = streamAttach(streamUrl, {
+          msg: (data) => {
+            if (stopped) return
+            lastStreamAt = Date.now()
+            for (const m of liveRows(data, def.key)) push(m)
+          },
+          reopened: () => {
+            if (!stopped) void catchUp()
+          },
+        })
+      }
       if (pollId) return
       void poll()
       pollId = setInterval(() => void poll(), LIVE_FALLBACK_MS)
     }
 
     const halt = () => {
-      es?.close()
-      es = null
-      if (reopenId) {
-        clearTimeout(reopenId)
-        reopenId = null
-      }
+      detach?.()
+      detach = null
       if (pollId) {
         clearInterval(pollId)
         pollId = null
@@ -1200,6 +1339,7 @@ export class CbEdgeProvider implements DataProvider {
     // half-open and the minutes in between are gone. Reopen and re-read.
     const onWake = () => {
       if (stopped || document.hidden) return
+      streamKick(streamUrl)
       halt()
       start()
       void catchUp()

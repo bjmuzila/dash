@@ -39,7 +39,9 @@ services:
     # highest OOM score — and Postgres, the largest, used to be the obvious pick,
     # taking every site's auth down with it. Lower is safer; -500 makes a Node
     # container the victim first (2026-10-09). Takes effect when the container
-    # is recreated: docker compose -f db/docker-compose.db.yml up -d
+    # is recreated — WITH the project name, or compose tries to make a second
+    # container and fails on the name (applied 2026-10-10):
+    #   docker compose -p cbedge-db -f db/docker-compose.db.yml up -d --timeout 60
     oom_score_adj: -500
     # Sized for this box (7.5 GB RAM shared with the app, SSD): a 1.5 GB cache,
     # the rest left to the OS page cache and the Node containers.

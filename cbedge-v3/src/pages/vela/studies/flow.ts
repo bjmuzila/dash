@@ -118,16 +118,45 @@ const sharedPending = new Map<string, Promise<unknown>>()
 /** Whale Prints ranges already read whole once (later reads skip the today-first step). */
 const wholeRangeRead = new Set<string>()
 
+/**
+ * An answer is ALSO reused for SHARE_MS after it lands (2026-10-10, audit "300
+ * users"). Sharing only the request in flight left three studies on the same URL
+ * — Vol/GEX Flow and the two drawn off its series, each on its own 15 s timer —
+ * sending three requests a cycle, because their timers almost never fire in the
+ * same instant. SHARE_MS is under every caller's refresh, so each still gets an
+ * answer from this cycle; the ones a few seconds apart now share one.
+ */
+const SHARE_MS = 10_000
+const recent = new Map<string, { at: number; p: Promise<unknown> }>()
+function remember(url: string, p: Promise<unknown>): void {
+  void p.then(() => {
+    recent.set(url, { at: Date.now(), p })
+    if (recent.size > 200) {
+      const cut = Date.now() - SHARE_MS
+      for (const [k, v] of recent) if (v.at < cut) recent.delete(k)
+    }
+  })
+}
+function recentHit<T>(url: string): Promise<T> | null {
+  const hit = recent.get(url)
+  return hit && Date.now() - hit.at < SHARE_MS ? (hit.p as Promise<T>) : null
+}
+
 function sharedJson<T>(url: string): Promise<T | null> {
+  const held = recentHit<T | null>(url)
+  if (held) return held
   let p = sharedPending.get(url) as Promise<T | null> | undefined
   if (!p) {
     p = getJson<T>(url).finally(() => sharedPending.delete(url))
     sharedPending.set(url, p)
+    remember(url, p)
   }
   return p
 }
 
 function readBins(url: string): Promise<Bin[] | null> {
+  const held = recentHit<Bin[] | null>(url)
+  if (held) return held
   let p = pending.get(url)
   if (!p) {
     p = getJson<{ bins?: { sec?: unknown; callNet?: unknown; putNet?: unknown }[] }>(url)
@@ -141,6 +170,7 @@ function readBins(url: string): Promise<Bin[] | null> {
       )
       .finally(() => pending.delete(url))
     pending.set(url, p)
+    remember(url, p)
   }
   return p
 }
