@@ -354,7 +354,9 @@ export async function loadEarnings(): Promise<void> {
         const m = new Map<string, EarnMove[]>()
         for (const [sym, rows] of Object.entries(j?.tickers ?? {})) {
           if (!Array.isArray(rows)) continue
-          const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+          // the study sends moves as fractions (0.04 = 4%), as the Seasonality page reads
+          // them; everything here works in percent, so convert once on the way in
+          const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v * 100 : null)
           m.set(
             sym.toUpperCase(),
             rows

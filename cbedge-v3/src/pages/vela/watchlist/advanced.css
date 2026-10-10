@@ -1159,41 +1159,32 @@ span.cb-wla-hc,
 .cb-wla[data-tab='news'] .cb-wla-body {
   border-right: 0;
 }
-/* Financials: last 8 earnings reactions, up above the line, down below */
+/* Financials: the last 8 earnings reactions as a small column chart (reactionBars) */
 .cb-wla .cb-wla-rx {
   display: flex;
-  align-items: stretch;
-  gap: 3px;
-  height: 30px;
+  align-items: center;
+  gap: 8px;
 }
-.cb-wla .cb-wla-rx i {
+.cb-wla .cb-wla-rxsvg {
+  flex: none;
+  overflow: visible;
+}
+.cb-wla .cb-wla-rxsvg .base {
+  stroke: var(--color-line);
+  stroke-width: 1;
+}
+.cb-wla .cb-wla-rxsvg rect.up {
+  fill: var(--color-up);
+}
+.cb-wla .cb-wla-rxsvg rect.down {
+  fill: var(--color-down);
+}
+.cb-wla .cb-wla-rxn {
   display: flex;
-  flex: 0 0 11px;
   flex-direction: column;
-}
-.cb-wla .cb-wla-rx i > span {
-  display: flex;
-  flex: 1 1 0;
-}
-.cb-wla .cb-wla-rx i > span:first-child {
-  align-items: flex-end;
-  border-bottom: 1px solid var(--color-line);
-}
-.cb-wla .cb-wla-rx i > span:last-child {
-  align-items: flex-start;
-}
-.cb-wla .cb-wla-rx b {
-  display: block;
-  width: 100%;
-  height: 0;
-}
-.cb-wla .cb-wla-rx b.up {
-  background: var(--color-up);
-  border-radius: 2px 2px 0 0;
-}
-.cb-wla .cb-wla-rx b.down {
-  background: var(--color-down);
-  border-radius: 0 0 2px 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  line-height: 1.25;
 }
 .cb-wla .cb-wla-erdate.hot {
   padding: 2px 7px;

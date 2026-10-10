@@ -201,33 +201,43 @@ function avgAbs(xs: readonly (number | null)[]): number | null {
 }
 const sessionWord = (s: 'pre' | 'after' | 'unknown') => (s === 'pre' ? 'Before open' : s === 'after' ? 'After close' : 'Time TBD')
 /**
- * The last 8 earnings-day moves as small bars, newest first: up above the line,
- * down below it, height by size (12% fills a half).
+ * The last 8 earnings-day moves as a small column chart (rebuilt 2026-10-10):
+ * oldest on the left, newest on the right, up above a baseline in green and down
+ * below it in red. Heights share one scale across the whole table (`scale`, the
+ * list's biggest move) on a square-root curve, so a 2% move is still visible next
+ * to a 20% one, and a column of tall bars really is a wild stock. The count of up
+ * vs down reactions sits beside it.
  */
-function reactionBars(doc: Document, moves: readonly (number | null)[]): HTMLElement {
+function reactionBars(doc: Document, moves: readonly (number | null)[], scale: number): HTMLElement {
   const wrap = el(doc, 'span', 'cb-wla-td cb-wla-rx')
-  const v = moves.slice(0, 8)
-  if (!v.some((x) => x != null)) {
-    wrap.textContent = '·'
+  const v = moves.slice(0, 8).filter((x): x is number => x != null).reverse()
+  if (!v.length) {
+    wrap.append(el(doc, 'span', 'muted', '·'))
     return wrap
   }
-  wrap.setAttribute('role', 'img')
-  wrap.setAttribute('aria-label', `Last ${v.length} earnings-day moves: ${v.map((x) => (x == null ? 'n/a' : fPct(x))).join(', ')}`)
-  for (const x of v) {
-    const bar = el(doc, 'i')
-    const h = x == null ? 0 : Math.max(8, Math.min(100, (Math.abs(x) / 12) * 100))
-    const upH = el(doc, 'b', 'up')
-    const dnH = el(doc, 'b', 'down')
-    if (x != null && x > 0) upH.style.height = `${h}%`
-    if (x != null && x < 0) dnH.style.height = `${h}%`
-    const top = el(doc, 'span')
-    top.append(upH)
-    const bot = el(doc, 'span')
-    bot.append(dnH)
-    bar.append(top, bot)
-    bar.title = x == null ? 'no figure' : fPct(x)
-    wrap.append(bar)
-  }
+  const W = 9
+  const G = 3
+  const H = 34
+  const mid = H / 2
+  const svg = svgEl(doc, 'svg', { width: 8 * (W + G) - G, height: H, viewBox: `0 0 ${8 * (W + G) - G} ${H}`, class: 'cb-wla-rxsvg' })
+  svg.setAttribute('role', 'img')
+  svg.setAttribute('aria-label', `Last ${v.length} earnings-day moves, oldest first: ${v.map((x) => fPct(x)).join(', ')}`)
+  svg.append(svgEl(doc, 'line', { x1: 0, x2: 8 * (W + G) - G, y1: mid, y2: mid, class: 'base' }))
+  const cap = Math.max(scale, 1)
+  // right-aligned: a stock with fewer than 8 reports keeps its newest on the right
+  const off = 8 - v.length
+  v.forEach((x, k) => {
+    const h = Math.max(2, Math.sqrt(Math.min(1, Math.abs(x) / cap)) * (mid - 1))
+    const r = svgEl(doc, 'rect', { x: (off + k) * (W + G), y: x >= 0 ? mid - h : mid, width: W, height: h, rx: 1.5, class: x >= 0 ? 'up' : 'down' })
+    const t = svgEl(doc, 'title', {})
+    t.textContent = fPct(x)
+    r.append(t)
+    svg.append(r)
+  })
+  const upN = v.filter((x) => x > 0).length
+  const tally = el(doc, 'span', 'cb-wla-rxn')
+  tally.append(el(doc, 'span', 'up', `${upN}▲`), el(doc, 'span', 'down', `${v.length - upN}▼`))
+  wrap.append(svg, tally)
   return wrap
 }
 
@@ -1026,8 +1036,8 @@ class AdvancedView {
     const stocks = this.finStocks()
     const rest = syms.filter((s) => resolveSym(s).kind !== 'stock')
     const table = el(doc, 'div', 'cb-wla-table cb-wla-fin')
-    table.style.setProperty('--cb-wla-cols', 'minmax(150px, 1.4fr) 96px 92px 72px 84px 110px 132px 80px 80px')
-    table.style.minWidth = '1080px'
+    table.style.setProperty('--cb-wla-cols', 'minmax(150px, 1.4fr) 96px 92px 72px 84px 110px 150px 80px 80px')
+    table.style.minWidth = '1100px'
     const th = el(doc, 'div', 'cb-wla-tr cb-wla-th')
     for (const [label, cls] of [
       ['Symbol', 'sym'],
@@ -1036,7 +1046,7 @@ class AdvancedView {
       ['EPS est.', 'num'],
       ['Market cap', 'num'],
       ['Last report', 'num'],
-      ['Last 8 reactions', 'rx'],
+      ['Last 8 · old → new', 'rx'],
       ['Avg move', 'num'],
       ['Avg gap', 'num'],
     ] as const)
@@ -1044,6 +1054,8 @@ class AdvancedView {
     table.append(th)
     if (!stocks.length) table.append(el(doc, 'div', 'cb-wla-empty', 'No stocks on this list — indexes, futures and ETFs have no earnings.'))
     const today = etDateKey(Date.now())
+    // one scale for every row's reaction chart: the list's biggest move (capped at 25%)
+    const rxScale = Math.min(25, Math.max(4, ...stocks.flatMap((x) => (earnMovesOf(x) ?? []).slice(0, 8).map((m) => Math.abs(m.day ?? 0)))))
     for (const sym of stocks) {
       const nx = earnNextOf(sym)
       const mv = earnMovesOf(sym)
@@ -1071,7 +1083,7 @@ class AdvancedView {
         el(doc, 'span', 'cb-wla-td num', nx?.epsEst ?? '·'),
         el(doc, 'span', 'cb-wla-td num', nx?.marketCap ? `$${compact(nx.marketCap)}` : '·'),
         lastCell,
-        reactionBars(doc, (mv ?? []).map((x) => x.day)),
+        reactionBars(doc, (mv ?? []).map((x) => x.day), rxScale),
         el(doc, 'span', 'cb-wla-td num strong', am == null ? '·' : `±${am.toFixed(1)}%`),
         el(doc, 'span', 'cb-wla-td num muted', ag == null ? '·' : `±${ag.toFixed(1)}%`),
       )
