@@ -11,17 +11,19 @@
 //   cards     breadth · average change · leader / laggard · volume vs usual ·
 //             SPX gamma (net GEX, walls, flip) · whale flow today, this list
 //   Price     a row per symbol, grouped: last, change, change %, volume,
-//             relative volume, day range, 5-day line, distance to the nearest
-//             wall (was the 30-day range), net GEX, put / call wall, whale flow — 1D / 5D change; click a column
+//             relative volume, day range, 5-day line, distance to the CORE and
+//             to the Reversal (▲ above / ▼ below price), net GEX, put / call wall,
+//             whale flow — 1D / 5D change; click a column
 //             to sort inside each group; ⋯ on a row: open, section, remove
 //   Financials  earnings: next report (date, before / after the open, EPS
 //             estimate, market cap) and the last reports' moves
 //   News & events  this list's whale prints today, its upcoming earnings, and
 //             the US economic calendar for today and tomorrow. There is no
 //             headline feed in the app; the tab says so rather than inventing one
-//   right     the selected symbol (intraday line, stats, walls, whale flow) ·
-//             allocation by group (equal weight) and each group's share of the
-//             day's move · the latest whale prints on the list
+//   right     all the selected ticker: intraday line, stats, walls / flip /
+//             CORE / Reversal, whale flow, its own whale prints, dark pool
+//             (placeholder). Financials: the earnings timeline and the selected
+//             stock's record. News: no rail, the three columns run full width
 //
 // A phone gets the same view as one column: cards in a sideways row, the tabs,
 // and compact rows (name, 5-day line, price, change badge); a tap opens the
@@ -82,7 +84,7 @@ const IDLE_MS = 10 * 60_000
 type Tab = 'price' | 'fin' | 'news'
 type Period = '1D' | '5D'
 type GroupMode = 'type' | 'sections' | 'none'
-type ColId = 'vol' | 'rvol' | 'day' | 'spark' | 'dist' | 'gex' | 'walls' | 'whale'
+type ColId = 'vol' | 'rvol' | 'day' | 'spark' | 'core' | 'rev' | 'gex' | 'walls' | 'whale'
 type SortKey = 'symbol' | 'last' | 'chg' | 'pct' | ColId
 
 interface Prefs {
@@ -98,7 +100,7 @@ const DEFAULT_PREFS: Prefs = {
   tab: 'price',
   period: '1D',
   group: 'type',
-  cols: { vol: true, rvol: true, day: true, spark: true, dist: true, gex: true, walls: true, whale: true },
+  cols: { vol: true, rvol: true, day: true, spark: true, core: true, rev: true, gex: true, walls: true, whale: true },
   sort: null,
   collapsed: [],
   selected: null,
@@ -189,6 +191,43 @@ function rangeBar(doc: Document, lo: number, hi: number, v: number | null): HTML
   const ends = el(doc, 'div', 'cb-wla-ends')
   ends.append(el(doc, 'span', '', fRange(lo)), el(doc, 'span', '', fRange(hi)))
   wrap.append(bar, ends)
+  return wrap
+}
+
+/** Mean size of the moves (sign dropped), the newest 8 at most; null with none. */
+function avgAbs(xs: readonly (number | null)[]): number | null {
+  const v = xs.filter((x): x is number => x != null).slice(0, 8)
+  return v.length ? v.reduce((t, x) => t + Math.abs(x), 0) / v.length : null
+}
+const sessionWord = (s: 'pre' | 'after' | 'unknown') => (s === 'pre' ? 'Before open' : s === 'after' ? 'After close' : 'Time TBD')
+/**
+ * The last 8 earnings-day moves as small bars, newest first: up above the line,
+ * down below it, height by size (12% fills a half).
+ */
+function reactionBars(doc: Document, moves: readonly (number | null)[]): HTMLElement {
+  const wrap = el(doc, 'span', 'cb-wla-td cb-wla-rx')
+  const v = moves.slice(0, 8)
+  if (!v.some((x) => x != null)) {
+    wrap.textContent = '·'
+    return wrap
+  }
+  wrap.setAttribute('role', 'img')
+  wrap.setAttribute('aria-label', `Last ${v.length} earnings-day moves: ${v.map((x) => (x == null ? 'n/a' : fPct(x))).join(', ')}`)
+  for (const x of v) {
+    const bar = el(doc, 'i')
+    const h = x == null ? 0 : Math.max(8, Math.min(100, (Math.abs(x) / 12) * 100))
+    const upH = el(doc, 'b', 'up')
+    const dnH = el(doc, 'b', 'down')
+    if (x != null && x > 0) upH.style.height = `${h}%`
+    if (x != null && x < 0) dnH.style.height = `${h}%`
+    const top = el(doc, 'span')
+    top.append(upH)
+    const bot = el(doc, 'span')
+    bot.append(dnH)
+    bar.append(top, bot)
+    bar.title = x == null ? 'no figure' : fPct(x)
+    wrap.append(bar)
+  }
   return wrap
 }
 
@@ -509,8 +548,9 @@ class AdvancedView {
           return gexOf(sym)?.net ?? null
         case 'whale':
           return whalesOf(this.flowSym(sym))?.net ?? null
-        case 'dist':
-          return this.wallDist(sym)?.sort ?? null
+        case 'core':
+        case 'rev':
+          return this.levelDist(sym, s.key)?.sort ?? null
         case 'day': {
           const lo = st?.low
           const hi = st?.high
@@ -555,7 +595,72 @@ class AdvancedView {
     this.renderSide()
   }
 
+  /** One cell of the summary strip. */
+  private card(label: string, value: string, sub: string, valueTone = '', cb = false, extra?: HTMLElement): HTMLElement {
+    const doc = this.doc
+    const c = el(doc, 'div', 'cb-wla-card')
+    const l = el(doc, 'div', `cb-wla-card-l${cb ? ' cb' : ''}`, label)
+    const v = el(doc, 'div', 'cb-wla-card-v', value)
+    if (valueTone) v.dataset.tone = valueTone
+    c.append(l, v)
+    if (extra) c.append(extra)
+    c.append(el(doc, 'div', 'cb-wla-card-s', sub))
+    return c
+  }
+
+  // The summary strip (concept A): one thin bar of figures under the header, its
+  // contents per tab — the list's price picture, its earnings, its events.
   private renderCards(): void {
+    if (this.prefs.tab === 'fin') return this.finCards()
+    if (this.prefs.tab === 'news') return this.newsCards()
+    this.priceCards()
+  }
+
+  private finCards(): void {
+    const syms = activeList().symbols
+    const stocks = syms.filter((s) => resolveSym(s).kind === 'stock')
+    const ups = this.finStocks().filter((s) => !!earnNextOf(s))
+    const nx = ups[0]
+    const e = nx ? earnNextOf(nx)! : null
+    const avgs = stocks.map((s) => [s, avgAbs((earnMovesOf(s) ?? []).map((x) => x.day))] as const).filter((x): x is readonly [string, number] => x[1] != null)
+    const listAvg = avgs.length ? avgs.reduce((t, x) => t + x[1], 0) / avgs.length : null
+    const wild = avgs.length ? avgs.reduce((a, b) => (b[1] > a[1] ? b : a)) : null
+    const wildGap = wild ? avgAbs((earnMovesOf(wild[0]) ?? []).map((x) => x.gap)) : null
+    this.cards.replaceChildren(
+      this.card('Reporting in 2 weeks', String(ups.length), `of ${stocks.length} stock${stocks.length === 1 ? '' : 's'} on this list`),
+      this.card('Next up', nx ?? '·', e ? `${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))} ${fDate(e.date)} · ${sessionWord(e.session).toLowerCase()}${e.epsEst ? ` · EPS est. ${e.epsEst}` : ''}` : 'nothing in the next two weeks'),
+      this.card('List avg move · last 8', listAvg == null ? '·' : `±${listAvg.toFixed(1)}%`, avgs.length ? `day-of reaction, ${avgs.length} stock${avgs.length === 1 ? '' : 's'} with history` : 'no earnings history on this list'),
+      this.card('Widest mover', wild ? wild[0] : '·', wild ? `±${wild[1].toFixed(1)}% avg move${wildGap != null ? ` · gap ±${wildGap.toFixed(1)}%` : ''}` : ''),
+      this.card('No earnings', String(syms.length - stocks.length), 'indexes, futures, ETFs'),
+    )
+  }
+
+  private newsCards(): void {
+    const syms = activeList().symbols
+    const prints = this.listPrints()
+    const flows = [...new Set(syms.map((s) => this.flowSym(s)))].map((s) => whalesOf(s)).filter((x) => !!x)
+    const wNet = flows.reduce((t, a) => t + a!.net, 0)
+    const big = prints.length ? prints.reduce((a, b) => (b.premium > a.premium ? b : a)) : null
+    const today = etDateKey(Date.now())
+    const hi = econEvents().find((e) => (e.impact === 'High' || e.impact === 'President') && (e.date > today || (e.date === today && !e.actual)))
+    const ups = syms
+      .map((s) => [s, earnNextOf(s)] as const)
+      .filter((x): x is readonly [string, NonNullable<ReturnType<typeof earnNextOf>>] => !!x[1])
+      .sort((a, b) => a[1].date.localeCompare(b[1].date))
+    const bigDesc = big ? this.printWords(big) : ''
+    this.cards.replaceChildren(
+      this.card('Whale prints today', String(prints.length), prints.length ? `net ${fMoney(wNet)} · ≥ $1M on this list` : 'none on this list yet', '', true),
+      this.card('Largest print', big ? fMoney(big.premium).replace(/^[+−]/, '') : '·', big ? `${big.sym} ${bigDesc} · ${CLOCK.format(big.ts)}` : '', big ? tone(big.bias) : ''),
+      this.card(
+        'Next high-impact',
+        hi ? hi.title : '·',
+        hi ? `${hi.date === today ? 'Today' : WEEKDAY.format(Date.parse(`${hi.date}T12:00:00Z`))} ${hi.label}${hi.forecast ? ` · fcst ${hi.forecast}` : ''}${hi.previous ? ` · prev ${hi.previous}` : ''}` : 'none in the next 7 days',
+      ),
+      this.card('List earnings', String(ups.length), ups.length ? ups.slice(0, 3).map(([s, e]) => `${s} ${fDate(e.date)}`).join(' · ') : 'none in the next two weeks'),
+    )
+  }
+
+  private priceCards(): void {
     const doc = this.doc
     const syms = activeList().symbols
     // The list-wide cards wait for the whole list (2026-10-10): figured while rows
@@ -582,16 +687,7 @@ class AdvancedView {
     const wNet = flows.reduce((t, a) => t + a!.net, 0)
     const wCount = flows.reduce((t, a) => t + a!.count, 0)
     const p = this.prefs.period
-    const card = (label: string, value: string, sub: string, valueTone = '', cb = false, extra?: HTMLElement) => {
-      const c = el(doc, 'div', 'cb-wla-card')
-      const l = el(doc, 'div', `cb-wla-card-l${cb ? ' cb' : ''}`, label)
-      const v = el(doc, 'div', 'cb-wla-card-v', value)
-      if (valueTone) v.dataset.tone = valueTone
-      c.append(l, v)
-      if (extra) c.append(extra)
-      c.append(el(doc, 'div', 'cb-wla-card-s', sub))
-      return c
-    }
+    const card = this.card.bind(this)
     const breadth = el(doc, 'div', 'cb-wla-breadth')
     const n = Math.max(1, up + dn)
     const bu = el(doc, 'i', 'up')
@@ -608,6 +704,16 @@ class AdvancedView {
       breadth.replaceChildren()
       bc.append(el(doc, 'div', 'cb-wla-card-s', loading(chgLeft)))
     }
+    // the period toggle rides at the end of the strip (concept A), not above the table
+    const periodCell = el(doc, 'div', 'cb-wla-card cb-wla-card-seg')
+    const seg = el(doc, 'div', 'cb-wla-seg')
+    for (const pp of ['1D', '5D'] as const) {
+      const b = btn(doc, '', pp)
+      if (pp === p) b.dataset.on = '1'
+      b.addEventListener('click', () => this.setPrefs({ period: pp }))
+      seg.append(b)
+    }
+    periodCell.append(el(doc, 'div', 'cb-wla-card-l', 'Change over'), seg)
     const lead = el(doc, 'div', 'cb-wla-card')
     lead.append(el(doc, 'div', 'cb-wla-card-l', `Leader / laggard · ${p}`))
     const lv = el(doc, 'div', 'cb-wla-card-v')
@@ -622,6 +728,7 @@ class AdvancedView {
       statsLeft ? card('Volume vs usual', '·', loading(statsLeft)) : card('Volume vs usual', med != null ? `${med.toFixed(2)}×` : '·', busy.length ? `busiest ${busy.map((x) => `${x[0]} ${x[1].toFixed(2)}×`).join(' · ')}` : 'vs the last 4 sessions, same time of day'),
       card('SPX gamma', spx ? fMoney(spx.net) : '·', spx ? `walls ${fLevel(spx.putWall)} / ${fLevel(spx.callWall)} · flip ${fLevel(spx.flip)}` : 'front expiry, OI + volume', tone(spx?.net), true),
       card('Whale flow today', flows.length ? fMoney(wNet) : '·', flows.length ? `net · ${wCount} print${wCount === 1 ? '' : 's'} ≥ $1M on this list` : 'no $1M+ prints on this list yet today', tone(wNet), true),
+      periodCell,
     )
   }
 
@@ -637,7 +744,8 @@ class AdvancedView {
     if (c.rvol) out.push({ id: 'rvol', label: 'Rel vol', cls: 'num' })
     if (c.day) out.push({ id: 'day', label: 'Day range', cls: 'rng' })
     if (c.spark) out.push({ id: 'spark', label: '5 day', cls: 'spark' })
-    if (c.dist) out.push({ id: 'dist', label: 'To wall', cls: 'num', cb: true })
+    if (c.core) out.push({ id: 'core', label: 'To core', cls: 'num', cb: true })
+    if (c.rev) out.push({ id: 'rev', label: 'To reversal', cls: 'num', cb: true })
     if (c.gex) out.push({ id: 'gex', label: 'Net GEX', cls: 'num', cb: true })
     // Voltick's word for the pair ("‖ WALLS 748/784"): put wall / call wall, in surge blue
     if (c.walls) out.push({ id: 'walls', label: 'Walls', cls: 'num', cb: true })
@@ -651,19 +759,12 @@ class AdvancedView {
     // sized to fit beside the right column at 1600px with every column on; narrower, the
     // table scrolls sideways under a symbol column that stays put
     const W: Record<string, number> = { num: 64, rng: 104, spark: 72 }
-    const widths = cols.map((c) => (c.id === 'walls' || c.id === 'dist' ? 92 : c.id === 'last' ? 80 : W[c.cls]!))
+    const widths = cols.map((c) => (c.id === 'walls' ? 92 : c.id === 'core' || c.id === 'rev' ? 88 : c.id === 'last' ? 80 : W[c.cls]!))
     const tpl = `minmax(130px, 1fr) ${widths.map((w) => `${w}px`).join(' ')} 26px`
     // the table is as wide as its columns need, and no wider than the view when they fit
     const minWidth = 130 + widths.reduce((t, w) => t + w, 0) + 26 + (widths.length + 1) * 10 + 32
     const tools = el(doc, 'div', 'cb-wla-tools')
-    const seg = el(doc, 'div', 'cb-wla-seg')
-    for (const p of ['1D', '5D'] as const) {
-      const b = btn(doc, '', p)
-      if (p === this.prefs.period) b.dataset.on = '1'
-      b.addEventListener('click', () => this.setPrefs({ period: p }))
-      seg.append(b)
-    }
-    tools.append(seg, el(doc, 'span', 'cb-wla-note', 'change measured over'), el(doc, 'span', 'cb-wla-sp'), el(doc, 'span', 'cb-wla-note cb-wla-hide-n', this.prefs.sort ? 'Sorted inside each group · click the column again to flip' : 'Click a column to sort · ⋯ on a row to open, move or remove'))
+    tools.append(el(doc, 'span', 'cb-wla-sp'), el(doc, 'span', 'cb-wla-note cb-wla-hide-n', this.prefs.sort ? 'Sorted inside each group · click the column again to flip' : 'Click a column to sort · ⋯ on a row to open, move or remove'))
     const table = el(doc, 'div', 'cb-wla-table')
     table.style.setProperty('--cb-wla-cols', tpl)
     table.style.minWidth = `${minWidth}px`
@@ -758,7 +859,7 @@ class AdvancedView {
           cell.dataset.tone = tone(chg)
           break
         case 'pct':
-          cell.textContent = fPct(pct)
+          cell.append(el(doc, 'span', 'cb-wla-pill', fPct(pct)))
           cell.dataset.tone = tone(pct)
           cell.classList.add('strong')
           break
@@ -776,19 +877,20 @@ class AdvancedView {
         case 'spark':
           cell.append(sparkline(doc, st?.spark ?? [], 80, 26))
           break
-        case 'dist': {
+        case 'core':
+        case 'rev': {
           if (via) {
             cell.textContent = `↳ ${via}`
             cell.classList.add('muted')
             break
           }
-          const d = this.wallDist(sym)
+          const d = this.levelDist(sym, c.id)
           if (d) {
-            cell.append(el(doc, 'span', d.side, d.text))
+            cell.append(el(doc, 'span', `cb-wla-lvd ${d.dir}`, d.text))
             cell.title = d.title
           } else {
             cell.textContent = '·'
-            if (gexOf(sym) === undefined && gexTicker(sym)) cell.title = 'Select the row to load its walls'
+            if (gexOf(sym) === undefined && gexTicker(sym)) cell.title = 'Select the row to load its levels'
           }
           break
         }
@@ -882,50 +984,50 @@ class AdvancedView {
     return [...new Set(['SPX', ...(sel ? [this.gexSym(sel)] : [])])]
   }
   /**
-   * How far price is from its nearest GEX wall (replaced the 30-day range, 2026-10-10).
-   * Between the walls: points to the nearer one ("37.1 to CW"). Through a wall: how far
-   * past it ("+3.2 over CW"). sort: % to the nearer wall, negative once through one, so
-   * an ascending sort puts broken walls first, then the closest.
+   * How far price is from the CORE or the Reversal (replaced "to wall", 2026-10-10):
+   * points, with an arrow for the side the level is on — ▲ above price, ▼ below.
+   * sort: the distance as a share of price, so an ascending sort puts the closest first.
    */
-  private wallDist(sym: string): { text: string; side: 'pw' | 'cw'; sort: number; title: string } | null {
+  private levelDist(sym: string, which: 'core' | 'rev'): { text: string; dir: 'above' | 'below'; sort: number; title: string } | null {
     if (resolveSym(sym).kind === 'futures') return null
     const g = gexOf(sym)
     const px = this.price(sym)
-    if (!g || px == null || px <= 0) return null
-    const pw = g.putWall
-    const cw = g.callWall
-    const fp = (v: number) => (Math.abs(v) >= 10 ? Math.abs(v).toFixed(1) : Math.abs(v).toFixed(2))
-    const pc = (v: number) => `${((Math.abs(v) / px) * 100).toFixed(2)}%`
-    if (cw != null && px > cw) return { text: `+${fp(px - cw)} over CW`, side: 'cw', sort: -((px - cw) / px) * 100, title: `${pc(px - cw)} above the call wall ${fLevel(cw)}` }
-    if (pw != null && px < pw) return { text: `−${fp(pw - px)} under PW`, side: 'pw', sort: -((pw - px) / px) * 100, title: `${pc(pw - px)} below the put wall ${fLevel(pw)}` }
-    const toC = cw != null ? cw - px : Infinity
-    const toP = pw != null ? px - pw : Infinity
-    if (!Number.isFinite(toC) && !Number.isFinite(toP)) return null
-    return toC <= toP
-      ? { text: `${fp(toC)} to CW`, side: 'cw', sort: (toC / px) * 100, title: `${pc(toC)} below the call wall ${fLevel(cw)}` }
-      : { text: `${fp(toP)} to PW`, side: 'pw', sort: (toP / px) * 100, title: `${pc(toP)} above the put wall ${fLevel(pw)}` }
+    const lv = which === 'core' ? g?.core : g?.reversal
+    if (lv == null || px == null || px <= 0) return null
+    const d = lv - px
+    const a = Math.abs(d)
+    const pts = a >= 10 ? a.toFixed(1) : a.toFixed(2)
+    const name = which === 'core' ? 'CORE' : 'Reversal'
+    return {
+      text: `${d >= 0 ? '▲' : '▼'} ${pts}`,
+      dir: d >= 0 ? 'above' : 'below',
+      sort: (a / px) * 100,
+      title: `${name} ${fLevel(lv)} — ${pts} pts (${((a / px) * 100).toFixed(2)}%) ${d >= 0 ? 'above' : 'below'} price`,
+    }
   }
   private openOnChart(sym: string): void {
     this.ctx.setSymbol(`${PROVIDER_NAME}:${sym}`)
     this.close()
   }
 
-  // ── Financials ──
+  // ── Financials (concept A, 2026-10-10) ──
+  // Stocks only in the table, the ones reporting soonest first; each with its last 8
+  // earnings-day moves as small up / down bars. Indexes, futures and ETFs never
+  // report, so they fold into one line at the foot instead of a row of dots each.
+  private finStocks(): string[] {
+    const syms = activeList().symbols.filter((s) => resolveSym(s).kind === 'stock')
+    const key = (s: string) => earnNextOf(s)?.date ?? '9999'
+    return syms.slice().sort((a, b) => key(a).localeCompare(key(b)) || a.localeCompare(b))
+  }
+
   private renderFin(): void {
     const doc = this.doc
     const syms = activeList().symbols
-    const tools = el(doc, 'div', 'cb-wla-finnote')
-    tools.append(
-      el(
-        doc,
-        'span',
-        'cb-wla-note',
-        'Earnings: the next report from the Nasdaq calendar (this week and next), and how the stock moved on its last reports (CB Edge’s earnings study, large caps). Balance-sheet figures need a fundamentals feed the app does not have yet.',
-      ),
-    )
+    const stocks = this.finStocks()
+    const rest = syms.filter((s) => resolveSym(s).kind !== 'stock')
     const table = el(doc, 'div', 'cb-wla-table cb-wla-fin')
-    table.style.setProperty('--cb-wla-cols', 'minmax(150px, 1.4fr) 96px 92px 84px 92px 120px 96px 96px')
-    table.style.minWidth = '1000px'
+    table.style.setProperty('--cb-wla-cols', 'minmax(150px, 1.4fr) 96px 92px 72px 84px 110px 132px 80px 80px')
+    table.style.minWidth = '1080px'
     const th = el(doc, 'div', 'cb-wla-tr cb-wla-th')
     for (const [label, cls] of [
       ['Symbol', 'sym'],
@@ -934,16 +1036,15 @@ class AdvancedView {
       ['EPS est.', 'num'],
       ['Market cap', 'num'],
       ['Last report', 'num'],
-      ['Avg move (8)', 'num'],
-      ['Avg gap (8)', 'num'],
+      ['Last 8 reactions', 'rx'],
+      ['Avg move', 'num'],
+      ['Avg gap', 'num'],
     ] as const)
       th.append(el(doc, 'span', `cb-wla-hc ${cls}`, label))
     table.append(th)
-    const avgAbs = (xs: (number | null)[]) => {
-      const v = xs.filter((x): x is number => x != null).slice(0, 8)
-      return v.length ? v.reduce((t, x) => t + Math.abs(x), 0) / v.length : null
-    }
-    for (const sym of syms) {
+    if (!stocks.length) table.append(el(doc, 'div', 'cb-wla-empty', 'No stocks on this list — indexes, futures and ETFs have no earnings.'))
+    const today = etDateKey(Date.now())
+    for (const sym of stocks) {
       const nx = earnNextOf(sym)
       const mv = earnMovesOf(sym)
       const row = el(doc, 'div', 'cb-wla-tr cb-wla-row cb-wla-finrow')
@@ -953,36 +1054,129 @@ class AdvancedView {
       const d = this.descOf.get(sym)
       if (d && d !== sym) name.append(el(doc, 'small', '', d))
       symCell.append(this.logo(sym), name)
+      const soon = nx ? nx.date === today : false
+      const next = el(doc, 'span', 'cb-wla-td')
+      if (nx) next.append(el(doc, 'span', `cb-wla-erdate${soon ? ' hot' : ''}`, soon ? 'Today' : `${WEEKDAY.format(Date.parse(`${nx.date}T12:00:00Z`))} ${fDate(nx.date)}`))
+      else next.append(el(doc, 'span', 'muted', 'not in 2 wks'))
       const last = mv?.[0]
       const lastCell = el(doc, 'span', 'cb-wla-td num')
-      if (last && last.day != null) {
-        lastCell.append(el(doc, 'span', tone(last.day), fPct(last.day)), el(doc, 'small', 'muted', ` ${fDate(last.date)}`))
-      } else lastCell.textContent = '·'
-      const today = etDateKey(Date.now())
-      const soon = nx ? nx.date === today : false
+      if (last && last.day != null) lastCell.append(el(doc, 'span', tone(last.day), fPct(last.day)), el(doc, 'small', 'muted', ` ${fDate(last.date)}`))
+      else lastCell.textContent = '·'
+      const am = avgAbs((mv ?? []).map((x) => x.day))
+      const ag = avgAbs((mv ?? []).map((x) => x.gap))
       row.append(
         symCell,
-        el(doc, 'span', `cb-wla-td${soon ? ' hot' : ''}`, nx ? (soon ? 'Today' : fDate(nx.date)) : resolveSym(sym).kind === 'stock' ? 'not in 2 wks' : '·'),
-        el(doc, 'span', 'cb-wla-td', nx ? (nx.session === 'pre' ? 'Before open' : nx.session === 'after' ? 'After close' : 'Time TBD') : ''),
+        next,
+        el(doc, 'span', 'cb-wla-td', nx ? sessionWord(nx.session) : ''),
         el(doc, 'span', 'cb-wla-td num', nx?.epsEst ?? '·'),
         el(doc, 'span', 'cb-wla-td num', nx?.marketCap ? `$${compact(nx.marketCap)}` : '·'),
         lastCell,
-        el(doc, 'span', 'cb-wla-td num', mv ? fPct(avgAbs(mv.map((x) => x.day))).replace(/^[+−]/, '±') : '·'),
-        el(doc, 'span', 'cb-wla-td num', mv ? fPct(avgAbs(mv.map((x) => x.gap))).replace(/^[+−]/, '±') : '·'),
+        reactionBars(doc, (mv ?? []).map((x) => x.day)),
+        el(doc, 'span', 'cb-wla-td num strong', am == null ? '·' : `±${am.toFixed(1)}%`),
+        el(doc, 'span', 'cb-wla-td num muted', ag == null ? '·' : `±${ag.toFixed(1)}%`),
       )
       row.addEventListener('click', () => (narrow() ? this.openOnChart(sym) : this.select(sym)))
-      if (sym === this.selected()) row.dataset.sel = '1'
+      if (sym === this.finSelected()) row.dataset.sel = '1'
       table.append(row)
     }
-    this.body.replaceChildren(tools, table)
+    if (rest.length) {
+      const r = el(doc, 'div', 'cb-wla-finrest')
+      r.append(el(doc, 'b', '', 'Index, futures & ETFs'), el(doc, 'span', 'cb-wla-note', ` ${rest.length} · no earnings — ${rest.slice(0, 14).join(', ')}${rest.length > 14 ? ` +${rest.length - 14}` : ''}`))
+      table.append(r)
+    }
+    const note = el(
+      doc,
+      'div',
+      'cb-wla-note cb-wla-finnote',
+      'Next report from the Nasdaq calendar (this week and next). Reactions are the day-of move on each of the last 8 reports, newest first, from CB Edge’s earnings study (large caps). Balance-sheet figures need a fundamentals feed the app does not have yet.',
+    )
+    this.body.replaceChildren(table, note)
   }
 
-  // ── News & events ──
+  /** The stock the Financials rail describes: the selected row if it is a stock, else the first reporter. */
+  private finSelected(): string | null {
+    const s = this.selected()
+    if (s && resolveSym(s).kind === 'stock') return s
+    return this.finStocks()[0] ?? null
+  }
+
+  private renderFinSide(): HTMLElement[] {
+    const doc = this.doc
+    const out: HTMLElement[] = []
+    // the next two weeks, as a timeline
+    const tl = el(doc, 'section', 'cb-wla-box')
+    const th = el(doc, 'h4')
+    th.append(el(doc, 'span', '', 'Earnings timeline'), el(doc, 'span', 'cb-wla-note', 'next 2 weeks'))
+    tl.append(th)
+    const stocks = this.finStocks()
+    const ups = stocks.filter((s) => !!earnNextOf(s))
+    const later = stocks.filter((s) => !earnNextOf(s))
+    const line = el(doc, 'div', 'cb-wla-tl')
+    if (!ups.length) line.append(el(doc, 'div', 'cb-wla-note', 'Nothing on this list reports in the next two weeks.'))
+    for (const s of ups) {
+      const e = earnNextOf(s)!
+      const am = avgAbs((earnMovesOf(s) ?? []).map((x) => x.day))
+      const it = el(doc, 'div', 'cb-wla-tlitem on')
+      it.append(
+        el(doc, 'div', 'cb-wla-tlwhen', `${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))} ${fDate(e.date)} · ${sessionWord(e.session).toLowerCase()}`),
+        el(doc, 'div', 'cb-wla-tlwhat', ''),
+      )
+      const what = it.lastElementChild as HTMLElement
+      what.append(el(doc, 'b', '', s), el(doc, 'span', 'cb-wla-note', [e.epsEst ? `EPS est. ${e.epsEst}` : '', am != null ? `avg ±${am.toFixed(1)}%` : ''].filter(Boolean).join(' · ')))
+      line.append(it)
+    }
+    if (later.length) {
+      const it = el(doc, 'div', 'cb-wla-tlitem')
+      it.append(el(doc, 'div', 'cb-wla-tlwhen', 'Later'), el(doc, 'div', 'cb-wla-note', `${later.slice(0, 12).join(', ')}${later.length > 12 ? ` +${later.length - 12}` : ''} — not in the next 2 weeks`))
+      line.append(it)
+    }
+    tl.append(line)
+    out.push(tl)
+    // the selected stock's earnings record
+    const sym = this.finSelected()
+    if (sym) {
+      const mv = (earnMovesOf(sym) ?? []).map((x) => x.day).filter((x): x is number => x != null).slice(0, 8)
+      const box = el(doc, 'section', 'cb-wla-box')
+      const h = el(doc, 'h4')
+      h.append(el(doc, 'span', '', `Selected · ${sym}`), el(doc, 'span', 'cb-wla-note', mv.length ? `last ${mv.length} reports` : 'no history'))
+      box.append(h)
+      if (mv.length) {
+        const kv = el(doc, 'div', 'cb-wla-kv')
+        const k = (label: string, v: string, cls = '') => {
+          const d = el(doc, 'div')
+          d.append(el(doc, 'span', '', label), el(doc, 'b', cls, v))
+          kv.append(d)
+        }
+        const upN = mv.filter((x) => x > 0).length
+        k('Up reactions', `${upN} of ${mv.length}`, 'up')
+        k('Down reactions', `${mv.length - upN} of ${mv.length}`, 'down')
+        k('Biggest up', fPct(Math.max(...mv)), tone(Math.max(...mv)))
+        k('Biggest down', fPct(Math.min(...mv)), tone(Math.min(...mv)))
+        box.append(kv)
+      } else box.append(el(doc, 'div', 'cb-wla-note', 'The earnings study does not cover this stock.'))
+      const acts = el(doc, 'div', 'cb-wla-acts')
+      const openB = btn(doc, 'cb-wla-btn cb-wla-primary', 'Open on chart')
+      openB.addEventListener('click', () => this.openOnChart(sym))
+      acts.append(openB)
+      box.append(acts)
+      out.push(box)
+    }
+    return out
+  }
+
+  // ── News & events (concept A) ──
+  private printFilter: 'all' | 'C' | 'P' | 'big' = 'all'
+
+  /** This list's $1M+ prints today, newest first. */
+  private listPrints(): WhalePrint[] {
+    const flows = [...new Set(activeList().symbols.map((s) => this.flowSym(s)))]
+    return flows.flatMap((s) => whalesOf(s)?.prints ?? []).sort((a, b) => b.ts - a.ts)
+  }
+
   private renderNews(): void {
     const doc = this.doc
     const syms = activeList().symbols
-    const flows = [...new Set(syms.map((s) => this.flowSym(s)))]
-    const prints: WhalePrint[] = flows.flatMap((s) => whalesOf(s)?.prints ?? []).sort((a, b) => b.ts - a.ts)
+    const all = this.listPrints()
     const wrap = el(doc, 'div', 'cb-wla-news')
     const box = (title: string, sub: string) => {
       const b = el(doc, 'section', 'cb-wla-box')
@@ -991,29 +1185,66 @@ class AdvancedView {
       b.append(h)
       return b
     }
-    const note = el(doc, 'div', 'cb-wla-note cb-wla-newsnote', 'Headlines need a news feed, which the app does not have yet, so this is what CB Edge does have: the list’s $1M+ option prints today, its upcoming earnings, and the US economic calendar.')
-    // prints
-    const pb = box('Whale prints · this list', 'today, ≥ $1M, newest first')
-    if (!prints.length) pb.append(el(doc, 'div', 'cb-wla-note', 'No $1M+ prints on this list yet today.'))
-    for (const p of prints.slice(0, 40)) pb.append(this.printRow(p))
+    // prints, with filters
+    const pb = box('Whale prints', 'This list · today · $1M and up · newest first')
+    const chips = el(doc, 'div', 'cb-wla-chips')
+    const filters: ['all' | 'C' | 'P' | 'big', string, (p: WhalePrint) => boolean][] = [
+      ['all', 'All', () => true],
+      ['C', 'Calls', (p) => p.type === 'C'],
+      ['P', 'Puts', (p) => p.type === 'P'],
+      ['big', '≥ $3M', (p) => p.premium >= 3_000_000],
+    ]
+    for (const [id, label, fn] of filters) {
+      const c = btn(doc, 'cb-wla-chip', `${label} ${all.filter(fn).length}`)
+      if (id === this.printFilter) c.dataset.on = '1'
+      c.addEventListener('click', () => {
+        this.printFilter = id
+        this.schedule()
+      })
+      chips.append(c)
+    }
+    pb.append(chips)
+    const keep = filters.find((f) => f[0] === this.printFilter)![2]
+    const shown = all.filter(keep)
+    if (!shown.length) pb.append(el(doc, 'div', 'cb-wla-note', all.length ? 'No prints match this filter.' : 'No $1M+ prints on this list yet today.'))
+    for (const p of shown.slice(0, 60)) pb.append(this.printRow(p))
     // earnings
-    const eb = box('Earnings · this list', 'this week and next')
+    const eb = box('Earnings', 'This list · this week and next')
     const ups = syms
       .map((s) => [s, earnNextOf(s)] as const)
       .filter((x): x is readonly [string, NonNullable<ReturnType<typeof earnNextOf>>] => !!x[1])
       .sort((a, b) => a[1].date.localeCompare(b[1].date))
     if (!ups.length) eb.append(el(doc, 'div', 'cb-wla-note', 'Nothing on this list reports in the next two weeks.'))
+    let eday = ''
     for (const [s, e] of ups) {
+      if (e.date !== eday) {
+        eday = e.date
+        eb.append(el(doc, 'div', 'cb-wla-dayhead', DAYHEAD.format(Date.parse(`${e.date}T12:00:00Z`))))
+      }
+      const am = avgAbs((earnMovesOf(s) ?? []).map((x) => x.day))
       const r = el(doc, 'div', 'cb-wla-item')
       r.append(
-        el(doc, 'span', 'cb-wla-time', `${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))} ${fDate(e.date)}`),
         el(doc, 'b', '', s),
-        el(doc, 'span', 'cb-wla-evt', `${e.session === 'pre' ? 'before the open' : e.session === 'after' ? 'after the close' : 'time TBD'}${e.epsEst ? ` · EPS est. ${e.epsEst}` : ''}`),
+        el(doc, 'span', 'cb-wla-evt', `${sessionWord(e.session).toLowerCase()}${e.epsEst ? ` · EPS est. ${e.epsEst}` : ''}`),
+        el(doc, 'span', 'cb-wla-note', am != null ? `avg ±${am.toFixed(1)}%` : ''),
       )
       eb.append(r)
     }
+    eb.append(el(doc, 'div', 'cb-wla-note cb-wla-newsnote2', 'Headlines need a news feed, which the app does not have yet: this tab shows the list’s $1M+ option prints, its upcoming earnings, and the US economic calendar.'))
     // calendar — the coming week, a heading per day
-    const cb = box('Economic calendar · US', 'the next 7 days')
+    const cb = box('Economic calendar', 'US · the next 7 days')
+    const legend = el(doc, 'div', 'cb-wla-legend')
+    for (const [imp, label] of [
+      ['High', 'High'],
+      ['Medium', 'Medium'],
+    ] as const) {
+      const i = el(doc, 'i', 'cb-wla-imp')
+      i.dataset.impact = imp
+      const s = el(doc, 'span')
+      s.append(i, doc.createTextNode(` ${label}`))
+      legend.append(s)
+    }
+    cb.append(legend)
     const week = weekDates()
     const evs = econEvents().filter((e) => week.includes(e.date) && e.impact !== 'Holiday')
     if (!evs.length) cb.append(el(doc, 'div', 'cb-wla-note', 'No events in the next 7 days.'))
@@ -1025,7 +1256,7 @@ class AdvancedView {
       }
       cb.append(this.eventRow(e))
     }
-    wrap.append(note, pb, eb, cb)
+    wrap.append(pb, eb, cb)
     this.body.replaceChildren(wrap)
   }
 
@@ -1040,17 +1271,22 @@ class AdvancedView {
     return r
   }
 
-  private printRow(p: WhalePrint): HTMLElement {
-    const doc = this.doc
-    const r = el(doc, 'div', 'cb-wla-item cb-wla-print')
+  /** "Bought 6720 Call · Oct 17" */
+  private printWords(p: WhalePrint): string {
     const verb = p.action === 'BUY' ? 'Bought' : p.action === 'SELL' ? 'Sold' : ''
     const kind = p.type === 'C' ? 'Call' : p.type === 'P' ? 'Put' : 'option'
     const strike = p.strike == null ? '' : Number.isInteger(p.strike) ? String(p.strike) : String(+p.strike.toFixed(2))
     const exp = p.expiry ? (p.expiry.slice(0, 10) === etDateKey(p.ts) ? '0DTE' : fDate(p.expiry)) : ''
+    return [verb, strike, kind].filter(Boolean).join(' ') + (exp ? ` · ${exp}` : '')
+  }
+
+  private printRow(p: WhalePrint): HTMLElement {
+    const doc = this.doc
+    const r = el(doc, 'div', 'cb-wla-item cb-wla-print')
     r.append(
       el(doc, 'span', 'cb-wla-time', CLOCK.format(p.ts)),
       el(doc, 'b', '', p.sym),
-      el(doc, 'span', 'cb-wla-evt', [verb, strike, kind].filter(Boolean).join(' ') + (exp ? ` · ${exp}` : '')),
+      el(doc, 'span', 'cb-wla-evt', this.printWords(p)),
       el(doc, 'span', `cb-wla-amt ${p.bias > 0 ? 'up' : p.bias < 0 ? 'down' : ''}`, fMoney(p.premium).replace(/^[+−]/, '')),
     )
     return r
@@ -1059,6 +1295,10 @@ class AdvancedView {
   // ── right column ──
   private renderSide(): void {
     const doc = this.doc
+    // concept A: News runs full width (its three columns are the page); Financials
+    // has its own rail — the earnings timeline and the selected stock's record
+    if (this.prefs.tab === 'news') return this.side.replaceChildren()
+    if (this.prefs.tab === 'fin') return this.side.replaceChildren(...this.renderFinSide())
     const sym = this.selected()
     const out: HTMLElement[] = []
     if (sym) {
@@ -1099,6 +1339,8 @@ class AdvancedView {
       lvl('Put wall', g?.putWall ?? null, 'pw')
       lvl('Gamma flip', g?.flip ?? null, 'fl')
       lvl('Call wall', g?.callWall ?? null, 'cw')
+      lvl('CORE', g?.core ?? null, 'co')
+      lvl('Reversal', g?.reversal ?? null, 'rv')
       box.append(lv)
       if (flow !== sym) box.append(el(doc, 'div', 'cb-wla-note', `Levels and flow are ${flow}’s.`))
       const w = whalesOf(flow)
@@ -1114,54 +1356,27 @@ class AdvancedView {
       box.append(acts)
       out.push(box)
     }
-    // the list's latest prints
-    const flows = [...new Set(activeList().symbols.map((s) => this.flowSym(s)))]
-    const prints = flows.flatMap((s) => whalesOf(s)?.prints ?? []).sort((a, b) => b.ts - a.ts)
-    const pb = el(doc, 'section', 'cb-wla-box')
-    const ph = el(doc, 'h4')
-    ph.append(el(doc, 'span', '', 'Whale prints today'), el(doc, 'span', 'cb-wla-note', prints.length ? `${prints.length} on this list` : 'this list'))
-    pb.append(ph)
-    if (!prints.length) pb.append(el(doc, 'div', 'cb-wla-note', 'No $1M+ prints on this list yet today.'))
-    for (const p of prints.slice(0, 8)) pb.append(this.printRow(p))
-    if (prints.length > 8) {
-      const more = btn(doc, 'cb-wla-link', `All ${prints.length} prints →`)
-      more.addEventListener('click', () => this.setPrefs({ tab: 'news' }))
-      pb.append(more)
+    // concept A (2026-10-10): the whole rail is the selected ticker — its own
+    // whale prints, then dark pool (a placeholder until that feed exists).
+    // The list-wide boxes (all prints, the week's key events, allocation) are gone:
+    // the News tab and the summary strip carry the list.
+    if (sym) {
+      const flow = this.flowSym(sym)
+      const prints = whalesOf(flow)?.prints ?? []
+      const pb = el(doc, 'section', 'cb-wla-box')
+      const ph = el(doc, 'h4')
+      ph.append(el(doc, 'span', '', `Whale prints · ${flow}`), el(doc, 'span', 'cb-wla-note', prints.length ? `${prints.length} today` : 'today'))
+      pb.append(ph)
+      if (!prints.length) pb.append(el(doc, 'div', 'cb-wla-note', `No $1M+ prints on ${flow} yet today.`))
+      for (const p of prints.slice(0, 12)) pb.append(this.printRow(p))
+      if (prints.length > 12) pb.append(el(doc, 'div', 'cb-wla-note', `+${prints.length - 12} more today`))
+      out.push(pb)
+      const dp = el(doc, 'section', 'cb-wla-box cb-wla-soon')
+      const dh = el(doc, 'h4')
+      dh.append(el(doc, 'span', '', `Dark pool · ${flow}`), el(doc, 'span', 'cb-wla-note', 'coming soon'))
+      dp.append(dh, el(doc, 'div', 'cb-wla-note', `${flow}’s dark pool prints will show here once CB Edge has a dark pool feed.`))
+      out.push(dp)
     }
-    out.push(pb)
-    // the week ahead: this list's earnings, and the calendar's high-impact events
-    const wk = el(doc, 'section', 'cb-wla-box')
-    const wh = el(doc, 'h4')
-    wh.append(el(doc, 'span', '', 'This week'), el(doc, 'span', 'cb-wla-note', 'earnings · key events'))
-    wk.append(wh)
-    const week = weekDates()
-    const ers = activeList()
-      .symbols.map((s) => [s, earnNextOf(s)] as const)
-      .filter((x): x is readonly [string, NonNullable<ReturnType<typeof earnNextOf>>] => !!x[1] && week.includes(x[1].date))
-      .sort((a, b) => a[1].date.localeCompare(b[1].date))
-    for (const [s, e] of ers) {
-      const r = el(doc, 'div', 'cb-wla-item')
-      r.append(
-        el(doc, 'span', 'cb-wla-time', WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))),
-        el(doc, 'span', 'cb-wla-er', 'ER'),
-        el(doc, 'b', '', s),
-        el(doc, 'span', 'cb-wla-evt cb-wla-note', e.session === 'pre' ? 'before the open' : e.session === 'after' ? 'after the close' : 'time TBD'),
-      )
-      wk.append(r)
-    }
-    const key = econEvents().filter((e) => week.includes(e.date) && (e.impact === 'High' || e.impact === 'President'))
-    for (const e of key.slice(0, 10)) {
-      const r = this.eventRow(e)
-      r.querySelector('.cb-wla-time')!.textContent = `${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))} ${e.label}`
-      r.querySelector('.cb-wla-note')?.remove()
-      wk.append(r)
-    }
-    if (!ers.length && !key.length) wk.append(el(doc, 'div', 'cb-wla-note', 'No list earnings or high-impact events in the next 7 days.'))
-    const all = btn(doc, 'cb-wla-link', 'Full week →')
-    all.addEventListener('click', () => this.setPrefs({ tab: 'news' }))
-    wk.append(all)
-    out.push(wk)
-    out.push(this.allocation())
     this.side.replaceChildren(...out)
   }
 
@@ -1194,64 +1409,6 @@ class AdvancedView {
     return svg
   }
 
-  private allocation(): HTMLElement {
-    const doc = this.doc
-    const box = el(doc, 'section', 'cb-wla-box')
-    const h = el(doc, 'h4')
-    h.append(el(doc, 'span', '', 'Allocation'), el(doc, 'span', 'cb-wla-note', `equal weight · ${this.prefs.group === 'sections' ? 'by section' : this.prefs.group === 'none' ? 'by type' : 'by type'}`))
-    box.append(h)
-    const total = activeList().symbols.length
-    const groups = this.prefs.group === 'none' ? this.groupsBy('type') : this.groups()
-    if (!total) {
-      box.append(el(doc, 'div', 'cb-wla-note', 'Nothing on this list.'))
-      return box
-    }
-    const S = 112
-    const r = S / 2 - 9
-    const svg = svgEl(doc, 'svg', { width: S, height: S, viewBox: `0 0 ${S} ${S}`, class: 'cb-wla-donut' })
-    let a0 = -Math.PI / 2
-    const gap = groups.length > 1 ? 0.05 : 0
-    groups.forEach((g, i) => {
-      const k = g.syms.length / total
-      const a1 = a0 + k * Math.PI * 2
-      const s0 = a0 + gap / 2
-      const s1 = Math.max(s0 + 0.001, a1 - gap / 2)
-      const large = s1 - s0 > Math.PI ? 1 : 0
-      const cx = S / 2
-      const p = k >= 0.999 ? svgEl(doc, 'circle', { cx, cy: cx, r }) : svgEl(doc, 'path', { d: `M ${cx + r * Math.cos(s0)} ${cx + r * Math.sin(s0)} A ${r} ${r} 0 ${large} 1 ${cx + r * Math.cos(s1)} ${cx + r * Math.sin(s1)}` })
-      p.setAttribute('style', `stroke: var(${GROUP_COLORS[i % GROUP_COLORS.length]})`)
-      svg.append(p)
-      a0 = a1
-    })
-    const t1 = svgEl(doc, 'text', { x: S / 2, y: S / 2 - 1, class: 'n' })
-    t1.textContent = String(total)
-    const t2 = svgEl(doc, 'text', { x: S / 2, y: S / 2 + 13, class: 'l' })
-    t2.textContent = total === 1 ? 'symbol' : 'symbols'
-    svg.append(t1, t2)
-    const leg = el(doc, 'div', 'cb-wla-leg')
-    groups.forEach((g, i) => {
-      const ch = g.syms.map((s) => this.change(s)[1]).filter((x): x is number => x != null)
-      const contrib = ch.reduce((t, x) => t + x, 0) / total
-      const d = el(doc, 'div')
-      const sw = el(doc, 'i')
-      sw.style.background = `var(${GROUP_COLORS[i % GROUP_COLORS.length]})`
-      d.append(sw, el(doc, 'span', 'cb-wla-legn', g.name), el(doc, 'span', 'cb-wla-note', `${Math.round((g.syms.length / total) * 100)}%`), el(doc, 'span', tone(contrib), ch.length ? fPct(contrib) : '·'))
-      leg.append(d)
-    })
-    leg.append(el(doc, 'div', 'cb-wla-note cb-wla-legfoot', `weight · share of the ${this.prefs.period} move`))
-    const row = el(doc, 'div', 'cb-wla-alloc')
-    row.append(svg, leg)
-    box.append(row)
-    return box
-  }
-  private groupsBy(mode: GroupMode): Group[] {
-    const keep = this.prefs.group
-    this.prefs.group = mode
-    const g = this.groups()
-    this.prefs.group = keep
-    return g
-  }
-
   // ── popovers ──
   private closePop(): void {
     this.pop.hidden = true
@@ -1276,7 +1433,8 @@ class AdvancedView {
       ['rvol', 'Relative volume'],
       ['day', 'Day range'],
       ['spark', '5-day line'],
-      ['dist', 'Distance to nearest wall'],
+      ['core', 'Distance to CORE'],
+      ['rev', 'Distance to Reversal'],
       ['gex', 'Net GEX'],
       ['walls', 'Walls (put / call)'],
       ['whale', 'Whale flow today'],

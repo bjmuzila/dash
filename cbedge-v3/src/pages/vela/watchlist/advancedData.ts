@@ -34,6 +34,7 @@ import type { OHLCV } from '@luxalgo/vela'
 import { query } from '@/data/api'
 import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
+import { vtFromLadder } from '@/data/voltickLevels'
 import { recentBars5, resolveSym } from '@/pages/vela/cbedgeProvider'
 
 export interface SymStats {
@@ -61,6 +62,10 @@ export interface GexSummary {
   putWall: number | null
   flip: number | null
   spot: number
+  /** CORE: the biggest |OI + volume| net GEX strike (the chain's own, as Key Levels draws it). */
+  core: number | null
+  /** Reversal: the heaviest strike on the other side of price from the CORE (vtFromLadder). */
+  reversal: number | null
 }
 
 export interface WhalePrint {
@@ -209,7 +214,7 @@ const STATS_SESSIONS = 5
 /** Callers list the selected symbol first. */
 export async function loadStats(syms: readonly string[]): Promise<void> {
   const now = Date.now()
-  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS).slice(0, 80)
+  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS).slice(0, 200)
   for (const s of due) statsAt.set(s, now)
   await pool(due, 6, async (s) => {
     try {
@@ -246,7 +251,10 @@ export async function loadGex(syms: readonly string[]): Promise<void> {
       } else {
         let net = 0
         for (const r of c.rows) net += (r.netGEX ?? 0) + (r.netVolGEX ?? 0)
-        gex.set(s, { net, callWall: c.callWall, putWall: c.putWall, flip: c.flip, spot: c.spot })
+        const core = c.core?.strike ?? null
+        const book = c.rows.map((r) => ({ strike: r.strike, net: (r.netGEX ?? 0) + (r.netVolGEX ?? 0) }))
+        const reversal = vtFromLadder(book, c.spot, core, { coil: false }).reversal
+        gex.set(s, { net, callWall: c.callWall, putWall: c.putWall, flip: c.flip, spot: c.spot, core, reversal })
       }
     } catch {
       if (!gex.has(s)) gex.set(s, null)
