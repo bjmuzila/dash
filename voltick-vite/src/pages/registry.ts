@@ -21,6 +21,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   DataFlow: lazy(() => import("./DataFlow")),
   Formulas: lazy(() => import("./Formulas")),
   Mockups: lazy(() => import("./Mockups")),
+  SpreadDesk: lazy(() => import("./spreadDesk/SpreadDesk")),
   // Every key in nav.ts has a component above. One added there without one
   // here renders Placeholder, which is the right state while it is written.
 };

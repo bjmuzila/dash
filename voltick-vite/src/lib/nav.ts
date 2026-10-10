@@ -52,6 +52,21 @@ export type VoltickGroup = {
 
 export const VOLTICK_SECTIONS: VoltickGroup[] = [
   {
+    title: "Spread Desk",
+    icon: "🛡️",
+    blurb:
+      "A screener for credit spread and iron condor traders: where the short strike sits against the walls, and what changed at it since. Mock data for now.",
+    items: [
+      {
+        label: "Spread Desk",
+        path: "/spread-desk",
+        key: "SpreadDesk",
+        note: "Strike finder, position monitor, journal, your own rules and a playbook. Synthetic boards and trades, nothing reads the feed yet.",
+        status: "live",
+      },
+    ],
+  },
+  {
     title: "Newsletter",
     icon: "📰",
     blurb: "The Weekly Edge, drawn in the Voltick system instead of the email's own palette.",
