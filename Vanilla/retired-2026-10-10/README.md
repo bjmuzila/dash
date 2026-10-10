@@ -32,3 +32,32 @@ exists.
 Also unwired (module kept, still used by daily-grades): the walls-reach routes
 /proxy/walls-reach(-run), /proxy/walls-watch(-run), /proxy/walls-alerts, and the
 attachRank() decoration on /proxy/walls (two dead queries per call).
+
+## Third pass — Discord alerts and the v2 dashboard
+
+**Discord alerts dropped.** `econ-alert-recorder.js` (polled /api/calendar every
+20s into public/signals.txt), `discord-relay.js` (signals.txt → Discord),
+`greeks-cross-alerts.js` (fed [Greeks] lines from greeks-ts-writer) and
+`signals-file.js` (their shared writer).
+
+**v2 cut to Test Lab + Levels** (Brandon: "only keep v2 stuff that's /app/test";
+Levels kept because Test Lab links to it). Everything under `v2/` here was
+unreachable once the v2 SPA routed only `/test` and `/levels`: Level Log, Strike
+History, Confidence Score, the /m/chain phone page, the Dealer Gamma and Prem
+Diff Test Lab tabs, the dead `app/app/*` shell routes, and every component /
+hook / lib file only they used (found by import-graph walk from the live entry
+points — Next special files, app-vite main.tsx, server-v2, scripts, tests).
+Old /app links redirect through PORTED in lib/v3Routes.ts.
+
+API routes removed with them (server copy and Next fallback): /api/flow,
+/api/flow/calls, /api/ict-prefs, /api/insights/{vix,gex,gex/stream,em,
+greeks-intraday,market-quality}, /api/obook, /api/semi-strength,
+/api/strike-gex-series, /api/tpo-forecast, /api/trump-calendar,
+/api/positioning-tickers, /api/market-scanner, /api/strike-summary,
+/api/econ-calendar, /api/spx-heatmap, /api/momentum-bias,
+/proxy/strike-dod-{dates,history,strikes}; bundles _lib-tpo-forecast.cjs and
+_lib-obook.cjs.
+
+Also unreferenced server files: condor-marks.js, voltick-levels.js,
+es-spx-basis-1.js (stale copy), tpo-profiles-recorder.js and its two backfill
+scripts (recorder removed 2026-10-06).

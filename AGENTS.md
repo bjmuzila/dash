@@ -179,6 +179,11 @@ If it could ONLY be v2, ask before touching it.
 
 ## v2 — the `app/` + `app-vite/` dashboard (REFERENCE ONLY, ask before editing)
 
+> **2026-10-10: v2 is now Test Lab (`/app/test`) + Levels (`/app/levels`) only.**
+> Every other v2 page, its components and its API routes were moved to
+> `Vanilla/retired-2026-10-10/` — see the README there. Much of what follows
+> describes pages that no longer exist.
+
 > Everything from here to the end of this file describes **v2**. It still runs
 > and it is still served, but it is **not** the default target — see the banner
 > at the top. Do not act on the "edit THIS" wording below without asking
