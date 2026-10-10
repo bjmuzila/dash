@@ -215,9 +215,9 @@ function reactionBars(doc: Document, moves: readonly (number | null)[], scale: n
     wrap.append(el(doc, 'span', 'muted', '·'))
     return wrap
   }
-  const W = 9
+  const W = 10
   const G = 3
-  const H = 34
+  const H = 40
   const mid = H / 2
   const svg = svgEl(doc, 'svg', { width: 8 * (W + G) - G, height: H, viewBox: `0 0 ${8 * (W + G) - G} ${H}`, class: 'cb-wla-rxsvg' })
   svg.setAttribute('role', 'img')
@@ -754,11 +754,9 @@ class AdvancedView {
     if (c.rvol) out.push({ id: 'rvol', label: 'Rel vol', cls: 'num' })
     if (c.day) out.push({ id: 'day', label: 'Day range', cls: 'rng' })
     if (c.spark) out.push({ id: 'spark', label: '5 day', cls: 'spark' })
-    if (c.core) out.push({ id: 'core', label: 'To core', cls: 'num', cb: true })
+    if (c.core) out.push({ id: 'core', label: 'To volt', cls: 'num', cb: true })
     if (c.rev) out.push({ id: 'rev', label: 'To reversal', cls: 'num', cb: true })
     if (c.gex) out.push({ id: 'gex', label: 'Net GEX', cls: 'num', cb: true })
-    // Voltick's word for the pair ("‖ WALLS 748/784"): put wall / call wall, in surge blue
-    if (c.walls) out.push({ id: 'walls', label: 'Walls', cls: 'num', cb: true })
     if (c.whale) out.push({ id: 'whale', label: 'Whale flow', cls: 'num', cb: true })
     return out
   }
@@ -1007,7 +1005,7 @@ class AdvancedView {
     const d = lv - px
     const a = Math.abs(d)
     const pts = a >= 10 ? a.toFixed(1) : a.toFixed(2)
-    const name = which === 'core' ? 'CORE' : 'Reversal'
+    const name = which === 'core' ? 'Volt' : 'Reversal'
     return {
       text: `${d >= 0 ? '▲' : '▼'} ${pts}`,
       dir: d >= 0 ? 'above' : 'below',
@@ -1351,7 +1349,7 @@ class AdvancedView {
       lvl('Put wall', g?.putWall ?? null, 'pw')
       lvl('Gamma flip', g?.flip ?? null, 'fl')
       lvl('Call wall', g?.callWall ?? null, 'cw')
-      lvl('CORE', g?.core ?? null, 'co')
+      lvl('Volt', g?.core ?? null, 'co')
       lvl('Reversal', g?.reversal ?? null, 'rv')
       box.append(lv)
       if (flow !== sym) box.append(el(doc, 'div', 'cb-wla-note', `Levels and flow are ${flow}’s.`))
@@ -1445,10 +1443,9 @@ class AdvancedView {
       ['rvol', 'Relative volume'],
       ['day', 'Day range'],
       ['spark', '5-day line'],
-      ['core', 'Distance to CORE'],
+      ['core', 'Distance to Volt'],
       ['rev', 'Distance to Reversal'],
       ['gex', 'Net GEX'],
-      ['walls', 'Walls (put / call)'],
       ['whale', 'Whale flow today'],
     ]
     this.pop.replaceChildren(

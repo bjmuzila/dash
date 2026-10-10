@@ -64,6 +64,8 @@ import {
 } from '@/pages/scanner/alignStyle'
 
 const CHART_H = 440
+/** The plot grows with the window so the card is filled, never below CHART_H. */
+const CHART_FILL = `max(${CHART_H}px, calc(100vh - 260px))`
 /** On the type scale (text-2xs). Canvas cannot take a class. */
 const AXIS_PX = 10
 
@@ -188,8 +190,11 @@ export default function AlignReplay({
         </span>
       </div>
 
-      <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 rounded-md border border-line p-3" style={{ flex: '999 1 640px' }}>
+      {/* items-stretch: the side column runs the full height of the chart box,
+          and the last panel (events) takes whatever is left — no dead space
+          under either column. */}
+      <div className="flex flex-wrap items-stretch gap-3">
+        <div className="flex min-w-0 flex-col rounded-md border border-line p-3" style={{ flex: '999 1 640px' }}>
           {/* Wall Migration's legend (2026-10-08): a square swatch, the name,
               and the value it holds RIGHT NOW in mono — so the chart reads
               without hunting for where each line ends. */}
@@ -221,11 +226,11 @@ export default function AlignReplay({
             </span>
           </div>
           {replayError ? (
-            <div className="flex items-center justify-center text-xs" style={{ height: CHART_H, color: DIM }}>
+            <div className="flex flex-1 items-center justify-center text-xs" style={{ minHeight: CHART_FILL, color: DIM }}>
               {replayError}
             </div>
           ) : (
-            <div className="flex" style={{ height: CHART_H }}>
+            <div className="flex flex-1" style={{ minHeight: CHART_FILL }}>
               <ConvergenceChart
                 raw={series}
                 series={steady}
@@ -340,7 +345,7 @@ export default function AlignReplay({
             )}
           </Panel>
 
-          <Panel title="Events · graded">
+          <Panel title="Events · graded" grow>
             {(!row || row.events.length === 0) && (
               <div className="text-xs" style={{ color: DIM }}>
                 No alignment changes yet.
@@ -385,9 +390,12 @@ export default function AlignReplay({
   )
 }
 
-function Panel({ title, children }: { title: string; children: ReactNode }) {
+function Panel({ title, children, grow = false }: { title: string; children: ReactNode; grow?: boolean }) {
   return (
-    <div className="rounded-md border border-line p-3" style={{ background: V2W.wash03 }}>
+    <div
+      className={['rounded-md border border-line p-3', grow ? 'min-h-0 flex-1 overflow-y-auto' : ''].join(' ')}
+      style={{ background: V2W.wash03 }}
+    >
       <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: LABEL }}>
         {title}
       </div>
@@ -455,7 +463,7 @@ function ConvergenceChart({
 // tinting turned the whole plot yellow/green and buried the lines. The raw
 // per-minute walls (what Hold smoothed out) are no longer drawn: they doubled
 // every line.
-const PAD = { l: 52, r: 58, t: 12, b: 50 }
+const PAD = { l: 52, r: 58, t: 8 }
 const STRIP_H = 18
 const STRIP_GAP = 22
 
@@ -504,7 +512,16 @@ function drawConvergence(
   for (const col of s.walls) for (const v of col) see(v)
   for (const v of s.spot) see(v)
   see(k)
-  for (const sg of allSegs ?? []) if (sg[0] <= tN) see(sg[1])
+  // Only the ALL segments actually drawn in [t0, tN] — a pre-session segment at
+  // an old strike used to stretch the axis and leave half the plot empty.
+  if (allSegs) {
+    for (let i = 0; i < allSegs.length; i++) {
+      const sg = allSegs[i]
+      if (!sg) continue
+      const tb = allSegs[i + 1]?.[0] ?? tN
+      if (sg[0] <= tN && tb >= t0) see(sg[1])
+    }
+  }
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return
   const padY = step > 0 ? step * 0.6 : Math.max(0.5, (hi - lo) * 0.05)
   lo -= padY

@@ -52,6 +52,21 @@ export type VoltickGroup = {
 
 export const VOLTICK_SECTIONS: VoltickGroup[] = [
   {
+    title: "Contract Dossier",
+    icon: "🔎",
+    blurb:
+      "One option contract on one screen: its whole price history, not just the part since you started watching, plus OI, IV and where the strike sits against the walls. Live CB Edge feed.",
+    items: [
+      {
+        label: "Contract dossier",
+        path: "/contract-dossier",
+        key: "ContractDossier",
+        note: "Your probe watchlist beside a deep pane: price and volume from before you added it, OI and IV since, and the strike against spot, the walls and the CB.",
+        status: "live",
+      },
+    ],
+  },
+  {
     title: "Spread Desk",
     icon: "🛡️",
     blurb:
