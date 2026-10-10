@@ -131,11 +131,33 @@ RUN --mount=type=cache,target=/root/.npm \
       echo "##############################################################"; \
     fi
 
-# ---- build ----
-FROM base AS build
+# ---- next ----
+# The Next.js compile, in its OWN stage with ONLY what it reads (2026-10-09).
+#
+# It used to run after `COPY . .`, so ANY change anywhere in the repo — a
+# server-v2 recorder, a Vela file, the version push.ps1 writes into package.json
+# on every push — invalidated it and paid the full ~7.5 min `next build` again.
+# Next compiles app/, components/, lib/ and hooks/ (every import in them stays
+# inside those four; checked 2026-10-09) plus the root configs below; the
+# server-v2 files some API routes load are required at RUNTIME via process.cwd(),
+# from the full tree the runtime image has. package.json comes from the pkg
+# stage with "version" stripped. So a push that does not touch these inputs gets
+# Next straight from cache.
+#
+# Adding a new top-level folder that app/ imports from? Add a COPY for it here,
+# or `next build` fails (loudly, before anything restarts).
+# The prebuild audit (scripts/audit-ui.mjs) also reads app-vite/src.
+FROM base AS next
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-# NEXT_PUBLIC_* vars (APP_VERSION, OWNER_USER_ID) are inlined at build time.
+COPY --from=pkg /app/package.json ./package.json
+COPY next.config.js tsconfig.json next-env.d.ts tailwind.config.ts postcss.config.js middleware.ts instrumentation.ts ./
+COPY app ./app
+COPY components ./components
+COPY lib ./lib
+COPY hooks ./hooks
+COPY scripts/audit-ui.mjs ./scripts/audit-ui.mjs
+COPY app-vite/src ./app-vite/src
+# NEXT_PUBLIC_* vars (OWNER_USER_ID, Supabase, Turnstile) are inlined at build time.
 # Pass them via --build-arg / compose build.args so the client bundle is correct.
 ARG NEXT_PUBLIC_OWNER_USER_ID
 ENV NEXT_PUBLIC_OWNER_USER_ID=${NEXT_PUBLIC_OWNER_USER_ID}
@@ -145,23 +167,39 @@ ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
-# .next/cache is a BuildKit cache mount: Next reuses compiled modules from the
-# previous deploy instead of starting cold. It lives on the VPS, not in the image
-# (Next recreates .next/cache at runtime if it needs one).
+# .next/cache is a BuildKit cache mount: when Next DOES rebuild, it reuses
+# compiled modules from the previous deploy instead of starting cold. It lives on
+# the VPS, not in the image (Next recreates .next/cache at runtime if needed).
 RUN --mount=type=cache,target=/app/.next/cache \
     npm run build
-# Build the Vite SPA (app-vite) fresh every deploy and replace public/app with
-# it. WITHOUT this step, public/app serves whatever stale Vite bundle happens to
-# be committed — new routes added to app-vite/src/App.tsx (e.g. /test,
-# /strike-history) silently never appear and fall through the SPA catch-all to
-# /traders-dashboard. This step is the permanent fix; do not remove it.
-# (app-vite compiles the Next pages via its '@' -> repo-root alias, so unlike
-# cbedge-v3 it cannot be split into its own stage; it needs the full source.)
+
+# ---- appvite ----
+# The Vite SPA (app-vite) served at /app — same treatment, same reason. It
+# compiles the Next client pages through its '@' -> repo-root alias, so its
+# inputs are app-vite/ plus the same four folders (and their packages, from the
+# root node_modules). Built fresh whenever those change; reused from cache
+# otherwise. WITHOUT a fresh build public/app serves whatever stale bundle is
+# committed and new routes silently fall through the SPA catch-all — this stage
+# is that fix, moved, not removed.
+FROM base AS appvite
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=pkg /app/package.json ./package.json
+COPY app ./app
+COPY components ./components
+COPY lib ./lib
+COPY hooks ./hooks
+COPY app-vite ./app-vite
 RUN --mount=type=cache,target=/root/.npm \
     cd app-vite && npm install --no-audit --no-fund && npm run build
-# Drop app-vite/node_modules once dist is copied: nothing reads it at runtime and
-# it would otherwise be copied into the runtime image on every deploy.
-RUN rm -rf public/app && cp -r app-vite/dist public/app && rm -rf app-vite/node_modules
+
+# ---- build ----
+# Assembly only: the full source tree (server-v2 runs from it), plus the three
+# compiled outputs. Nothing here compiles, so a server-only push spends seconds.
+FROM base AS build
+COPY . .
+COPY --from=next /app/.next ./.next
+COPY --from=appvite /app/app-vite/dist ./app-vite/dist
+RUN rm -rf public/app && cp -r app-vite/dist public/app
 # Dashboard v3: take the v3 stage's output if it built (see the v3 stage above).
 COPY --from=v3 /out/ /tmp/v3out/
 RUN if [ -d /tmp/v3out/v3 ]; then rm -rf public/v3 && cp -r /tmp/v3out/v3 public/v3; fi; rm -rf /tmp/v3out
@@ -171,6 +209,17 @@ FROM base AS runtime
 ENV NODE_ENV=production
 # server-v2 reads .env.local at boot (override:true). We mount it at runtime
 # rather than baking secrets into the image — see docker-compose env_file.
+#
+# TWO COPIES, NOT ONE (2026-10-09). This used to be a single
+# `COPY --from=build /app ./` carrying ~800 MB of node_modules plus the built
+# app in ONE layer. The app changes on every push, so that whole layer was new
+# every push and Docker compressed and unpacked all of it — the 3–4 minute
+# "exporting layers" / "unpacking" at the end of every deploy. node_modules now
+# comes straight from the deps stage in its own layer: byte-identical until a
+# dependency changes, so it is reused and only the app layer is exported. (The
+# build stage carries no node_modules at all, so the second COPY cannot shadow
+# this one.)
+COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app ./
 EXPOSE 3001
 # Same entrypoint package.json "start" uses. PORT is read from env (default 3001).

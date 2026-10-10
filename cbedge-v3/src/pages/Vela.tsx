@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VelaTheme } from '@luxalgo/vela'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { preload } from '@/data/api'
@@ -27,7 +27,7 @@ import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/repl
 import { bindStudyOrder } from '@/pages/vela/studyOrder'
 import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelAlertsEntry'
 import { ALERT_BELL_ID, bindAlertBell, registerAlertBell } from '@/pages/vela/alertBell'
-import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
+import { bindSetups, registerSetups } from '@/pages/vela/setups/setups'
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
 import { bindJournalLink, registerJournalLink } from '@/pages/vela/journalLink'
@@ -456,23 +456,10 @@ export interface VelaProps {
   replayOnOpen?: boolean
 }
 
-// VOLT WATCH at the top of the page (tape/TapeScroll.tsx; Brandon, 2026-10-07,
-// direction C of generated/Vela Volt Ticker Strip): the open watchlist's tickers
-// stepping past one at a time, each with where its ★ Volt is and how far price is
-// from it, A–Z or nearest first. It took the session stats strip's place (its on /
-// off and its order: Workspace → Volt watch, Volt watch order). DESKTOP ONLY (Brandon, 2026-10-07: "no
-// mobile for this"): the phone build shows no tape and its ⋮ has no row for it.
-// Lazily, so its chunk loads only while it is shown.
-const TapeScroll = lazy(() => import('@/pages/vela/tape/TapeScroll'))
-function StripHost({ ws, phone }: { ws: VelaWorkspace | null; phone: boolean }) {
-  const shown = useSyncExternalStore(onStrip, () => stripShown(false))
-  if (!ws || phone || !shown) return null
-  return (
-    <Suspense fallback={null}>
-      <TapeScroll ws={ws} onHide={() => setStripShown(false)} />
-    </Suspense>
-  )
-}
+// VOLT WATCH (tape/TapeScroll.tsx) is RETIRED (Brandon, 2026-10-09: "we can just
+// dump the volt watch"). Nothing mounts it, so its chunk is never built into the
+// page and none of its quote / level reads run. Its Workspace rows and top-bar
+// button are gone too (workspaceMenu.ts, setups/setups.ts).
 
 export default function Vela({ phone = false, replayOnOpen = false }: VelaProps) {
   // THE VOLTICK PIN. Set during render, before any child commits, so the first
@@ -708,7 +695,6 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
 
   return (
     <Page fill>
-      <StripHost ws={wsState} phone={phone} />
       <ChartFrame className="relative" onMount={onMount} onResize={() => wsRef.current?.resize()} />
       {/* bar replay's transport: portalled into the page's replay dock (ReplayDock) */}
       <ReplayHost ws={wsState} />

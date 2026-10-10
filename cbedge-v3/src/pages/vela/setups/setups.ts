@@ -14,7 +14,6 @@
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { onPhoneRoute } from '@/pages/vela/nav'
 
 let ws: VelaWorkspace | null = null
 let registered = false
@@ -100,17 +99,5 @@ export function registerSetups(): void {
       void import('./setupsMenu').then((m) => m.openSetups(ctx, anchor))
     },
   })
-  registerWidgetAction({
-    id: 'cb-stats',
-    target: 'topbar',
-    label: 'Volt watch',
-    icon: 'cb-stats',
-    iconOnly: true,
-    order: 6,
-    mobile: 'menu',
-    run: () => {
-      const phone = onPhoneRoute()
-      setStripShown(!stripShown(phone))
-    },
-  })
+  // The 'Volt watch' top-bar action is retired (2026-10-09) with the strip.
 }

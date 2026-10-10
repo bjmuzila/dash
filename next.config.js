@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const path = require('path');
-const pkg = require('./package.json');
+// (package.json is no longer read here — see the NEXT_PUBLIC_APP_VERSION note below.)
 
 const withBundleAnalyzer = require('@next/bundle-analyzer')({
   enabled: process.env.ANALYZE === 'true',
@@ -13,9 +13,13 @@ const nextConfig = {
   reactStrictMode: true,
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
-  // Surface the package.json version to the client so the owner dashboard shows
-  // the real build version (bumped by /push) instead of a hardcoded string.
-  env: { NEXT_PUBLIC_APP_VERSION: pkg.version },
+  // NEXT_PUBLIC_APP_VERSION (package.json's version) USED to be inlined here.
+  // Nothing read it (the owner site has its own VITE_APP_VERSION; the server's
+  // healthz reads package.json at runtime), and baking a value that changes on
+  // EVERY push into the build meant Next could never be reused from cache. The
+  // Dockerfile's `next` stage now builds from a version-stripped package.json, so
+  // Next recompiles only when its own files change (2026-10-09). Do not put a
+  // per-push value back into this config.
   outputFileTracingRoot: path.join(__dirname),
   // Keep more compiled pages hot in dev so route-to-route navigation doesn't
   // trigger a fresh on-demand webpack compile each time (your custom server uses

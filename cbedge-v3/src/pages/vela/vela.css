@@ -5414,7 +5414,8 @@
   /* above the Events lane, which runs along the bottom of the price pane */
   bottom: calc(var(--vela-price-pane-bottom) + 30px);
   font-family: var(--font-sans);
-  font-size: var(--text-sm);
+  /* 13px → 18px (Brandon, 2026-10-09: "a bit bigger") */
+  font-size: var(--text-lg);
   font-weight: 800;
   letter-spacing: -0.01em;
   line-height: 1;

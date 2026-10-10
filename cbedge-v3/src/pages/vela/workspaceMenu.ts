@@ -82,8 +82,7 @@ export const WS_GROUPS: readonly WsGroup[] = [
       { kind: 'panel', id: 'watchlist', label: 'Watchlist', icon: 'cb-watchlist', panel: WATCHLIST_PANEL_ID, keys: 'alt+w' },
       { kind: 'panel', id: 'data-window', label: 'Data window', icon: 'datawindow', panel: 'dataWindow', keys: 'alt+d' },
       { kind: 'panel', id: 'object-tree', label: 'Object tree', icon: 'objects', panel: 'objects', keys: 'alt+o' },
-      { kind: 'strip', id: 'session-stats', label: 'Volt watch', icon: 'cb-stats' },
-      { kind: 'sort', id: 'volt-watch-order', label: 'Volt watch order', icon: 'cb-vw-order' },
+      // Volt watch / Volt watch order: retired 2026-10-09 with the strip itself.
     ],
   },
   {
