@@ -6,9 +6,7 @@ import { HOME_THEME, LIGHT_BLUE, SOFT_RED, homeButtonStyle } from "@/components/
 import { PageShell, Card } from "@/components/shared/PageCard";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/components/legacy/SqueezeBoard";
-import DealerGammaTab from "@/components/legacy/testlab/DealerGammaTab";
 import GexMapTab from "@/components/legacy/testlab/GexMapTab";
-import PremDiffTab from "@/components/legacy/testlab/PremDiffTab";
 // Seasonality lives in components/seasonality/ — it is mounted twice: here in
 // the Test Lab and on the public /explore/seasonality page. The old
 // app/test/SeasonalityTab.tsx is a dead tombstone (export {}), which is what
@@ -617,7 +615,7 @@ function SymbolPanel({ data }: { data: SymbolData }) {
 // of a DOM event, so a stale "?tab=gexlevels" link would otherwise select a tab
 // that renders nothing.
 type TestTab =
-  | "flow" | "squeeze" | "dealergamma" | "gexmap" | "premdiff" | "seasonality"
+  | "flow" | "squeeze" | "gexmap" | "seasonality"
   // moved in from /scanner, 2026-08-16
   | "gex" | "gexpct" | "marketquality" | "statprompter"
   // 2026-08-23 — the Stat Prompter's IB book, driven from a criteria rail
@@ -700,12 +698,8 @@ export default function TestPage() {
         <StatPrompterTab />
       ) : tab === "condrail" ? (
         <ConditionRailTab />
-      ) : tab === "dealergamma" ? (
-        <DealerGammaTab />
       ) : tab === "gexmap" ? (
         <GexMapTab />
-      ) : tab === "premdiff" ? (
-        <PremDiffTab />
       ) : tab === "seasonality" ? (
         <SeasonalityView />
       ) : (

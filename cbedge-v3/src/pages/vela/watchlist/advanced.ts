@@ -12,7 +12,7 @@
 //             SPX gamma (net GEX, walls, flip) · whale flow today, this list
 //   Price     a row per symbol, grouped: last, change, change %, volume,
 //             relative volume, day range, 5-day line, distance to the nearest
-//             wall (was the 30-day range), net GEX, put / call wall, whale flow — 1D / 5D / 1M change; click a column
+//             wall (was the 30-day range), net GEX, put / call wall, whale flow — 1D / 5D change; click a column
 //             to sort inside each group; ⋯ on a row: open, section, remove
 //   Financials  earnings: next report (date, before / after the open, EPS
 //             estimate, market cap) and the last reports' moves
@@ -80,7 +80,7 @@ const TICK_MS = 15_000
 const IDLE_MS = 10 * 60_000
 
 type Tab = 'price' | 'fin' | 'news'
-type Period = '1D' | '5D' | '1M'
+type Period = '1D' | '5D'
 type GroupMode = 'type' | 'sections' | 'none'
 type ColId = 'vol' | 'rvol' | 'day' | 'spark' | 'dist' | 'gex' | 'walls' | 'whale'
 type SortKey = 'symbol' | 'last' | 'chg' | 'pct' | ColId
@@ -106,7 +106,8 @@ const DEFAULT_PREFS: Prefs = {
 function readPrefs(): Prefs {
   try {
     const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null') as Partial<Prefs> | null
-    if (raw && typeof raw === 'object') return { ...DEFAULT_PREFS, ...raw, cols: { ...DEFAULT_PREFS.cols, ...(raw.cols ?? {}) } }
+    // a saved '1M' (gone 2026-10-10: five sessions at most) falls back to 1D
+    if (raw && typeof raw === 'object') return { ...DEFAULT_PREFS, ...raw, period: raw.period === '5D' ? '5D' : '1D', cols: { ...DEFAULT_PREFS.cols, ...(raw.cols ?? {}) } }
   } catch {
     /* defaults */
   }
@@ -394,9 +395,9 @@ class AdvancedView {
     if (Date.now() - this.lastActive > IDLE_MS) return this.pause()
     const syms = activeList().symbols
     void refreshQuotes(syms)
-    // the selected row's stats first (its chart on the right); the full tape only for 1M
+    // the selected row's stats first (its chart on the right)
     const sel = this.selected()
-    void loadStats(sel ? [sel, ...syms.filter((s) => s !== sel)] : syms, this.prefs.period === '1M')
+    void loadStats(sel ? [sel, ...syms.filter((s) => s !== sel)] : syms)
     // lean: GEX only for the SPX card and the selected row, not every symbol
     void loadGex(this.gexSyms())
     void loadWhales()
@@ -453,7 +454,7 @@ class AdvancedView {
       if (px != null && st?.prevClose) return [px - st.prevClose, ((px - st.prevClose) / st.prevClose) * 100]
       return [null, null]
     }
-    const base = p === '5D' ? statsOf(sym)?.close5 : statsOf(sym)?.close21
+    const base = statsOf(sym)?.close5
     if (px == null || !base) return [null, null]
     return [px - base, ((px - base) / base) * 100]
   }
@@ -557,6 +558,15 @@ class AdvancedView {
   private renderCards(): void {
     const doc = this.doc
     const syms = activeList().symbols
+    // The list-wide cards wait for the whole list (2026-10-10): figured while rows
+    // were still arriving, the average, breadth and leader kept jumping until the
+    // last symbol landed. A symbol is settled once its change is known for good —
+    // a quote (1D), or its stats read finished (5D, or 1D without a quote).
+    const p0 = this.prefs.period
+    const settled = (s: string) => (p0 === '1D' && quoteOf(s)?.pct != null) || statsOf(s) !== undefined
+    const chgLeft = syms.filter((s) => !settled(s)).length
+    const statsLeft = syms.filter((s) => statsOf(s) === undefined).length
+    const loading = (left: number) => `loading · ${syms.length - left} of ${syms.length}`
     const chg = syms.map((s) => [s, this.change(s)[1]] as const).filter((x): x is readonly [string, number] => x[1] != null)
     const up = chg.filter((x) => x[1] > 0).length
     const dn = chg.filter((x) => x[1] < 0).length
@@ -593,18 +603,23 @@ class AdvancedView {
     bv.append(el(doc, 'span', 'up', `${up} ▲`), doc.createTextNode(' '), el(doc, 'span', 'down', `${dn} ▼`))
     const bc = el(doc, 'div', 'cb-wla-card')
     bc.append(el(doc, 'div', 'cb-wla-card-l', `Breadth · ${p}`), bv, breadth)
+    if (chgLeft) {
+      bv.replaceChildren(doc.createTextNode('·'))
+      breadth.replaceChildren()
+      bc.append(el(doc, 'div', 'cb-wla-card-s', loading(chgLeft)))
+    }
     const lead = el(doc, 'div', 'cb-wla-card')
     lead.append(el(doc, 'div', 'cb-wla-card-l', `Leader / laggard · ${p}`))
     const lv = el(doc, 'div', 'cb-wla-card-v')
-    if (best) {
+    if (best && !chgLeft) {
       lv.append(el(doc, 'span', 'up', best[0]), doc.createTextNode(' '), el(doc, 'small', tone(best[1]), fPct(best[1])))
     } else lv.textContent = '·'
-    lead.append(lv, el(doc, 'div', `cb-wla-card-s ${worst ? tone(worst[1]) : ''}`, worst ? `${worst[0]} ${fPct(worst[1])}` : ''))
+    lead.append(lv, el(doc, 'div', `cb-wla-card-s ${worst && !chgLeft ? tone(worst[1]) : ''}`, chgLeft ? loading(chgLeft) : worst ? `${worst[0]} ${fPct(worst[1])}` : ''))
     this.cards.replaceChildren(
       bc,
-      card(`Avg change · ${p}`, fPct(avg), `equal weight, ${chg.length} of ${syms.length} quoted`, tone(avg)),
+      chgLeft ? card(`Avg change · ${p}`, '·', loading(chgLeft)) : card(`Avg change · ${p}`, fPct(avg), `equal weight, ${chg.length} of ${syms.length} quoted`, tone(avg)),
       lead,
-      card('Volume vs usual', med != null ? `${med.toFixed(2)}×` : '·', busy.length ? `busiest ${busy.map((x) => `${x[0]} ${x[1].toFixed(2)}×`).join(' · ')}` : 'vs the last 20 sessions, same time of day'),
+      statsLeft ? card('Volume vs usual', '·', loading(statsLeft)) : card('Volume vs usual', med != null ? `${med.toFixed(2)}×` : '·', busy.length ? `busiest ${busy.map((x) => `${x[0]} ${x[1].toFixed(2)}×`).join(' · ')}` : 'vs the last 4 sessions, same time of day'),
       card('SPX gamma', spx ? fMoney(spx.net) : '·', spx ? `walls ${fLevel(spx.putWall)} / ${fLevel(spx.callWall)} · flip ${fLevel(spx.flip)}` : 'front expiry, OI + volume', tone(spx?.net), true),
       card('Whale flow today', flows.length ? fMoney(wNet) : '·', flows.length ? `net · ${wCount} print${wCount === 1 ? '' : 's'} ≥ $1M on this list` : 'no $1M+ prints on this list yet today', tone(wNet), true),
     )
@@ -642,13 +657,10 @@ class AdvancedView {
     const minWidth = 130 + widths.reduce((t, w) => t + w, 0) + 26 + (widths.length + 1) * 10 + 32
     const tools = el(doc, 'div', 'cb-wla-tools')
     const seg = el(doc, 'div', 'cb-wla-seg')
-    for (const p of ['1D', '5D', '1M'] as const) {
+    for (const p of ['1D', '5D'] as const) {
       const b = btn(doc, '', p)
       if (p === this.prefs.period) b.dataset.on = '1'
-      b.addEventListener('click', () => {
-        this.setPrefs({ period: p })
-        if (p === '1M') void loadStats(activeList().symbols, true)
-      })
+      b.addEventListener('click', () => this.setPrefs({ period: p }))
       seg.append(b)
     }
     tools.append(seg, el(doc, 'span', 'cb-wla-note', 'change measured over'), el(doc, 'span', 'cb-wla-sp'), el(doc, 'span', 'cb-wla-note cb-wla-hide-n', this.prefs.sort ? 'Sorted inside each group · click the column again to flip' : 'Click a column to sort · ⋯ on a row to open, move or remove'))

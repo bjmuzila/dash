@@ -17,13 +17,13 @@ import V3Redirect from './V3Redirect'
 // /m/gex · heatmap · es · em · prep · econ phone views) were compiled into every
 // build and never shown. They are gone from this SPA. What is left is exactly
 // LEGACY_NAV: the pages v3 does not have yet.
+// 2026-10-10 (Brandon: "only keep v2 stuff that's /app/test"): the v2 SPA is
+// now Test Lab plus Levels, which Test Lab links to. Level Log, Strike History,
+// Confidence Score and the /m/chain phone page were retired to
+// Vanilla/retired-2026-10-10/. /level-log and /m/chain have v3 homes (see
+// PORTED / MOBILE_TO_V3); the other two fall through to the catch-all.
 const Levels        = lazy(() => import('@/components/legacy/LevelsPage'))
-const LevelLog      = lazy(() => import('@/components/pages/LevelLog'))
-const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
-const Confidence    = lazy(() => import('@/components/pages/ConfidenceScore'))
 const TestLab       = lazy(() => import('@/components/pages/TestLab'))
-// Phone build: only the option chain is still v2-only (/m/chain).
-const MChain        = lazy(() => import('@/components/mobile/pages/MobileChain'))
 
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 
@@ -53,11 +53,7 @@ export default function App() {
             <LayoutShell chrome="v2-legacy">
               <Routes>
                 <Route path="/levels" element={S(<Levels />)} />
-                <Route path="/level-log" element={S(<LevelLog />)} />
-                <Route path="/strike-history" element={S(<StrikeHistory />)} />
-                <Route path="/confidence-score" element={S(<Confidence />)} />
                 <Route path="/test" element={S(<TestLab />)} />
-                <Route path="/m/chain" element={S(<MChain />)} />
                 {/* Anything else (a ported route V3Redirect is already leaving,
                     or an unknown path) goes to /traders-dashboard, which is
                     ported, so V3Redirect carries it on to /v3. */}

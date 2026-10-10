@@ -2,18 +2,16 @@
 // VELA WATCHLIST — what the Advanced view reads, beyond the quotes (store.ts).
 // Every source is one the app already serves; nothing here is new on the server.
 //
-//   STATS     per symbol, 5-minute regular-hours bars. FAST (2026-10-10): the last
-//             STATS_SESSIONS sessions through recentBars5 (the short tape the level
-//             reads use, a fraction of the 30-session one); the full 30-session
-//             chart tape (CbEdgeProvider.getBars) only once someone picks 1M, the
-//             one figure that needs it. Relative volume then averages the sessions
-//             the short tape holds (~6) instead of 20. From them: today's
-//             open / high / low and volume, RELATIVE VOLUME (today's volume so
-//             far against the average of the last 20 sessions at the same minute
-//             of the day), the 5-day line, the 30-day range, the closes 5 and ~21
-//             sessions back (the 5D / 1M change), and today's intraday line.
-//             Read when the view opens, then at most every 15 minutes per symbol
-//             (STATS_MS), 3 at a time — none of it needs to be live.
+//   STATS     per symbol, 5-minute regular-hours bars — FIVE SESSIONS AT MOST
+//             (2026-10-10: the watchlist never looks further back; the 30-session
+//             chart tape, the 30-day range and the 1M change are gone). Read
+//             through recentBars5, the short tape the level reads use. From them:
+//             today's open / high / low and volume, RELATIVE VOLUME (today's
+//             volume so far against the average of the 4 prior sessions at the
+//             same minute of the day), the 5-day line, the 5D change (against the
+//             open of the oldest session — the close before it is out of reach),
+//             and today's intraday line. Read when the view opens, then at most
+//             every 15 minutes per symbol (STATS_MS), 4 at a time.
 //   GEX       per symbol with an options chain: /api/chains front expiry through
 //             board/chainGex (the Key Levels study's own read): net GEX (OI +
 //             volume, summed over strikes), call wall, put wall, gamma flip.
@@ -36,7 +34,7 @@ import type { OHLCV } from '@luxalgo/vela'
 import { query } from '@/data/api'
 import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
-import { CbEdgeProvider, recentBars5, resolveSym } from '@/pages/vela/cbedgeProvider'
+import { recentBars5, resolveSym } from '@/pages/vela/cbedgeProvider'
 
 export interface SymStats {
   open: number | null
@@ -52,10 +50,8 @@ export interface SymStats {
   spark: number[]
   /** Today's 5-minute closes (regular hours). */
   intraday: number[]
-  range30: { lo: number; hi: number } | null
-  /** Last close of the session 5 / ~21 sessions back. */
+  /** What the 5D change is measured from: the open of the oldest of the 5 sessions. */
   close5: number | null
-  close21: number | null
   at: number
 }
 
@@ -108,7 +104,6 @@ export interface EconEvent {
   actual: string
 }
 
-const provider = new CbEdgeProvider()
 const listeners = new Set<() => void>()
 export function onAdvancedData(fn: () => void): () => void {
   listeners.add(fn)
@@ -172,9 +167,9 @@ export function statsFromBars(bars: readonly OHLCV[]): SymStats | null {
     lo = Math.min(lo, b.low)
     vol += b.volume ?? 0
   }
-  // relative volume: today so far vs the same minute of the day, last 20 sessions
+  // relative volume: today so far vs the same minute of the day, the prior sessions held (4)
   const nowMin = etMinutesOfDay(today[today.length - 1]!.time)
-  const past = days.slice(-21, -1)
+  const past = days.slice(0, -1)
   let sum = 0
   let n = 0
   for (const d of past) {
@@ -186,12 +181,6 @@ export function statsFromBars(bars: readonly OHLCV[]): SymStats | null {
     }
   }
   const avg = n ? sum / n : 0
-  let rlo = Infinity
-  let rhi = -Infinity
-  for (const b of bars) {
-    rlo = Math.min(rlo, b.low)
-    rhi = Math.max(rhi, b.high)
-  }
   const lastClose = (d: OHLCV[] | undefined) => (d && d.length ? d[d.length - 1]!.close : null)
   const five = days.slice(-5).flatMap((d) => d.map((b) => b.close))
   return {
@@ -204,10 +193,7 @@ export function statsFromBars(bars: readonly OHLCV[]): SymStats | null {
     relVol: vol > 0 && avg > 0 ? vol / avg : null,
     spark: thin(five, 48),
     intraday: today.map((b) => b.close),
-    range30: Number.isFinite(rlo) && Number.isFinite(rhi) ? { lo: rlo, hi: rhi } : null,
-    close5: lastClose(days[days.length - 6]),
-    // a short tape cannot reach a month back: no 1M figure rather than a wrong one
-    close21: days.length >= 22 ? lastClose(days[days.length - 22]) : null,
+    close5: days.length >= 5 ? (days[days.length - 5]![0]?.open ?? null) : null,
     at: Date.now(),
   }
 }
@@ -217,21 +203,17 @@ const STATS_MS = 15 * 60_000
 const GEX_MS = 5 * 60_000
 const WHALES_MS = 5 * 60_000
 
-/** Sessions in the short tape: today, the 5 the 5-day line and 5D change need, and one spare. */
-const STATS_SESSIONS = 7
-/** Symbols whose stats came off the full 30-session tape (asked for by the 1M period). */
-const statsDeep = new Set<string>()
+/** The most the watchlist looks back: today and the 4 sessions before it. */
+const STATS_SESSIONS = 5
 
-/** `deep`: the 30-session tape (1M change); otherwise the short one. Callers list the selected symbol first. */
-export async function loadStats(syms: readonly string[], deep = false): Promise<void> {
+/** Callers list the selected symbol first. */
+export async function loadStats(syms: readonly string[]): Promise<void> {
   const now = Date.now()
-  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS || (deep && !statsDeep.has(s))).slice(0, 80)
+  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS).slice(0, 80)
   for (const s of due) statsAt.set(s, now)
-  await pool(due, 4, async (s) => {
+  await pool(due, 6, async (s) => {
     try {
-      const full = deep || statsDeep.has(s)
-      const bars = full ? await provider.getBars(s, '5', {}) : await recentBars5(s, undefined, STATS_MS, STATS_SESSIONS)
-      if (full) statsDeep.add(s)
+      const bars = await recentBars5(s, undefined, STATS_MS, STATS_SESSIONS)
       stats.set(s, statsFromBars(bars))
     } catch {
       if (!stats.has(s)) stats.set(s, null)

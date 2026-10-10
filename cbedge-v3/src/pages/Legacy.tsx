@@ -60,7 +60,7 @@ const NOT_IN_V3: LegacyLink[] = [
     path: '/test',
     label: 'Test Lab',
     icon: '⚗️',
-    note: 'Eleven bench tabs — Squeeze, Dealer Gamma, GEX Map, GEX Scanner, GEX%, Market Quality, Stat Prompter, Condition Rail, Flow Inventory, Prem Diff, Seasonality. Built in v3, then retired 2026-08-30.',
+    note: 'Nine bench tabs — Squeeze, GEX Map, GEX Scanner, GEX%, Market Quality, Stat Prompter, Condition Rail, Flow Inventory, Seasonality. Built in v3, then retired 2026-08-30.',
   },
   {
     path: '/levels',
@@ -68,49 +68,10 @@ const NOT_IN_V3: LegacyLink[] = [
     icon: '🧱',
     note: 'CB / call wall / put wall for the whole scanner universe — 169 tickers of the three numbers Multi Greek shows for four.',
   },
-  {
-    path: '/strike-history',
-    label: 'Strike History',
-    icon: '🕘',
-    note: 'Per-strike history over the session. Lives under the Test Lab strip in v2.',
-  },
-  {
-    path: '/confidence-score',
-    label: 'Confidence Score',
-    icon: '📐',
-    note: 'The confidence model, scored and broken out by component.',
-  },
 ]
 
-// ── Pages v3 HAS, but only in part ───────────────────────────────────────────
-// A v3 route exists, so it is not in the list above — but the v2 page still
-// holds surfaces the port has not reached. These entries exist so "v3 has it"
-// never gets read as "v3 has all of it".
-const PARTIAL: LegacyLink[] = [
-  {
-    path: '/level-log',
-    label: 'Level Log',
-    icon: '🧱',
-    note: 'v3 has the wall-migration chart and the range switch. The ticker rail, the log card, the capture rail, the churn strip and the timeline are still v2 only.',
-  },
-]
-
-// ── Phone build ──────────────────────────────────────────────────────────────
-// v2 ships seven phone tabs, v3 five. Two of v2's have no v3 equivalent.
-const PHONE_ONLY: LegacyLink[] = [
-  {
-    path: '/m/chain',
-    label: 'Option Chain (phone)',
-    icon: '⛓️',
-    note: "Removed from the v3 tab bar 2026-09-03, the day after it landed — a strike ladder read ACROSS a dozen numeric columns does not survive 390px. v2's phone chain is still here.",
-  },
-  {
-    path: '/m/prep',
-    label: 'Premarket Prep (phone)',
-    icon: '🌅',
-    note: 'The pre-open prep board, phone build. No v3 phone counterpart yet.',
-  },
-]
+// Level Log (partial), Strike History, Confidence Score and the v2 phone pages
+// came off this page 2026-10-10 when the v2 SPA was cut to Test Lab + Levels.
 
 function LinkRow({ item }: { item: LegacyLink }) {
   return (
@@ -163,14 +124,6 @@ export default function Legacy() {
 
       <Card title={`Not in v3 (${NOT_IN_V3.length})`} expandable={false}>
         <LinkList items={NOT_IN_V3} />
-      </Card>
-
-      <Card title="Ported in part — the rest is still in v2" expandable={false}>
-        <LinkList items={PARTIAL} />
-      </Card>
-
-      <Card title="Phone build" expandable={false}>
-        <LinkList items={PHONE_ONLY} />
       </Card>
 
       <p className="text-2xs leading-relaxed text-faint">

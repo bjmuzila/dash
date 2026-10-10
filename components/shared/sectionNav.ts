@@ -97,17 +97,16 @@ export const TESTLAB_SECTION: SectionNav = {
   // makes the Test Lab strip show on /levels, which is now the only chrome that
   // links to it (it came out of GlobalToolbar's NAV_ITEMS) besides the
   // hamburger.
-  paths: ["/test", "/strike-history", "/levels"],
+  // Strike History, Dealer Gamma and Prem Diff retired 2026-10-10.
+  paths: ["/test", "/levels"],
   defaultTab: "squeeze",
   routes: [
-    { href: "/strike-history", label: "Strike History", short: "History", color: LIGHT_BLUE, icon: "🕘" },
     // The whole scanner universe's CB / call wall / put wall on one page —
     // 169 tickers of the three numbers Multi Greek shows for four.
     { href: "/levels",         label: "Levels",         short: "Levels",  color: HOME_THEME.cyan, icon: "🧱" },
   ],
   tabs: [
     { id: "squeeze",     label: "Squeeze",         short: "Squeeze",  color: HOME_THEME.orange, icon: "🌀" },
-    { id: "dealergamma", label: "Dealer Gamma",    short: "Dealer γ", color: LIGHT_BLUE,        icon: "🎚️" },
     { id: "gexmap",      label: "GEX Map",         short: "GEX Map",  color: LIGHT_BLUE,        icon: "🗺️" },
     // Moved in from /scanner on 2026-08-16. Same rule as the removed "dexcharm"
     // below: an id must be in BOTH `tabs` and `groups` to draw AND place a pill.
@@ -127,18 +126,14 @@ export const TESTLAB_SECTION: SectionNav = {
     // alone is harmless (renderItem returns null for an unknown id), but a
     // stale entry in `tabs` alone still draws the pill.
     { id: "flow",        label: "Flow Inventory",  short: "Flow Inv", color: HOME_THEME.cyan,   icon: "🌊" },
-    // ATM premium traded, calls vs puts, front + back monthly. Grouped with
-    // Flow Inventory rather than the gamma cluster: both read the TAPE (what
-    // dollars actually changed hands), not the book.
-    { id: "premdiff",    label: "Prem Diff",       short: "Prem Δ",   color: HOME_THEME.orange, icon: "⚖️" },
     // Its own cluster, not the gamma or tape ones: this reads a CALENDAR, not
     // the book and not the tape. Nothing on it updates intraday.
     { id: "seasonality", label: "Seasonality",     short: "Season",   color: LIGHT_BLUE,        icon: "📅" },
   ],
   groups: [
-    { key: "gamma",   tabs: ["squeeze", "dealergamma", "gexmap"] },
-    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter", "condrail"], routes: ["/strike-history", "/levels"] },
-    { key: "flow",    tabs: ["flow", "premdiff"] },
+    { key: "gamma",   tabs: ["squeeze", "gexmap"] },
+    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter", "condrail"], routes: ["/levels"] },
+    { key: "flow",    tabs: ["flow"] },
     { key: "season",  tabs: ["seasonality"] },
   ],
   event: TESTLAB_TAB_EVENT,

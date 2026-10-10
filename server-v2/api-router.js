@@ -122,17 +122,8 @@ catch (e) { console.warn('[api-router] premarket-baseline not loaded:', e.messag
 let libJournalCsv = null;
 try { libJournalCsv = require('./_lib-journal-csv.cjs'); }
 catch (e) { console.warn('[api-router] _lib-journal-csv.cjs not loaded:', e.message); }
-// TPO k-NN forecaster, extracted to lib/tpo-forecast-compute.ts (pulls lib/tpo +
-// balanceImbalance + valueArea; useEsCandles is type-only → erased):
-//   esbuild lib/tpo-forecast-compute.ts --bundle --platform=node --format=cjs --external:pg --outfile=server-v2/_lib-tpo-forecast.cjs
-let libTpoForecast = null;
-try { libTpoForecast = require('./_lib-tpo-forecast.cjs'); }
-catch (e) { console.warn('[api-router] _lib-tpo-forecast.cjs not loaded:', e.message); }
-// Order-book tenor-split read, extracted to lib/obook-compute.ts (self-contained;
-// forwardGet replaced with a direct /proxy fetch): esbuild → server-v2/_lib-obook.cjs
-let libObook = null;
-try { libObook = require('./_lib-obook.cjs'); }
-catch (e) { console.warn('[api-router] _lib-obook.cjs not loaded:', e.message); }
+// _lib-tpo-forecast.cjs (/api/tpo-forecast) and _lib-obook.cjs (/api/obook)
+// retired 2026-10-10 with the v2 pages that read them → Vanilla/retired-2026-10-10/.
 // ICT concept detectors (analyzeICT), pure lib/calculations/ictConcepts.ts (no
 // imports): esbuild lib/calculations/ictConcepts.ts --bundle --platform=node \
 //   --format=cjs --outfile=server-v2/_lib-ict.cjs
@@ -572,44 +563,7 @@ function visitAttribution(req, body) {
   }
 }
 
-// ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
-// Ports app/api/insights/gex/route.ts verbatim in behavior: forward to the
-// in-process /proxy/gex, reshape to the Exposure-tab payload. Subscriber-gated
-// (its data source /proxy/gex is subscriber-gated; middleware paywalled it too).
-// Still does the internal /proxy hop for a zero-behavior-change first cut; the
-// hop can be dropped later by calling the builder directly. Next is out of THIS
-// route's path once registered + its route.ts deleted.
-register('/api/insights/gex', {
-  auth: 'subscriber',
-  methods: ['GET'],
-  async handler(req, res, ctx) {
-    try {
-      const r = await ctx.internalFetch('/proxy/gex', { cache: 'no-store' });
-      if (!r.ok) return ctx.sendJson(res, r.status, { error: `proxy ${r.status}` }, req);
-      const p = await r.json();
-      const totals = p?.totals ?? null;
-      const callGexB = totals ? Number(totals.totalGEX ?? 0) / 1e9 : null;
-      const data = {
-        spot: p?.spot ?? null,
-        totals,
-        updatedAt: p?.updatedAt ?? Date.now(),
-        net_gex_billions: totals ? Number(totals.totalGEX ?? 0) / 1e9 : null,
-        net_gex_oivol_billions: totals ? Number(totals.totalGEXOiVol ?? totals.totalGEX ?? 0) / 1e9 : null,
-        call_gex_billions: callGexB,
-        put_gex_billions: null,
-        call_wall_spx: p?.callWall ?? null,
-        put_wall_spx: p?.putWall ?? null,
-        gamma_flip_spx: p?.gexFlip ?? null,
-        spx_spot: p?.spot ?? null,
-      };
-      ctx.sendJson(res, 200, { data }, req, {
-        cacheControl: 'no-store, no-cache, must-revalidate, max-age=0',
-      });
-    } catch (err) {
-      ctx.sendJson(res, 502, { error: String(err?.message || err) }, req);
-    }
-  },
-});
+// /api/insights/gex RETIRED 2026-10-10: no caller left after the v2 cut.
 
 // ── THIN /proxy forwarders (batch 1) ─────────────────────────────────────────
 // Each mirrors its app/api/*/route.ts 1:1 — same proxy path, same reshape, same
@@ -1117,68 +1071,11 @@ register('/api/calendar-quote', {
   },
 });
 
-// /api/flow — legacy static empty flow payload (unchanged behavior).
-register('/api/flow', {
-  auth: 'subscriber', methods: ['GET'],
-  async handler(req, res) {
-    send(res, 200, {
-      timestamp: Date.now(), entries: [],
-      summary: { totalCallPremium: 0, totalPutPremium: 0, ratio: 1, dominantSide: 'neutral' },
-    });
-  },
-});
+// /api/flow RETIRED 2026-10-10 with the v2 pages that called it (Vanilla/retired-2026-10-10/v2/).
 
 // ── Self-contained routes (no libDb): external-API fetches + /proxy compute ──
 
-// /api/semi-strength — Semiconductor Strength Index (from /proxy/semi-quotes).
-register('/api/semi-strength', {
-  auth: 'subscriber', methods: ['GET'],
-  async handler(req, res, ctx) {
-    const SEMIS = [
-      { sym: 'NVDA', weight: 20.70 }, { sym: 'TSM', weight: 9.09 }, { sym: 'AVGO', weight: 6.12 },
-      { sym: 'AMD', weight: 5.71 }, { sym: 'AMAT', weight: 5.12 }, { sym: 'ASML', weight: 5.11 },
-      { sym: 'MU', weight: 4.95 }, { sym: 'TXN', weight: 4.69 }, { sym: 'KLAC', weight: 4.62 }, { sym: 'LRCX', weight: 4.58 },
-    ];
-    const BENCH = ['SMH', 'SOXL', 'SPY', 'QQQ'];
-    const SCALE = 1.5;
-    const toSSI = (c) => Math.round((50 + 50 * Math.tanh(c / SCALE)) * 10) / 10;
-    const ssiLabel = (ssi) => ssi >= 70 ? 'STRONG' : ssi >= 57 ? 'FIRM' : ssi > 43 ? 'NEUTRAL' : ssi > 30 ? 'SOFT' : 'WEAK';
-    const r2 = (n) => Math.round(n * 100) / 100;
-    const getJson = async (path) => { try { const r = await ctx.internalFetch(path); return r.ok ? await r.json() : null; } catch { return null; } };
-    const symbols = [...SEMIS.map((s) => s.sym), ...BENCH].join(',');
-    const q = await getJson(`/proxy/semi-quotes?symbols=${encodeURIComponent(symbols)}`);
-    const quotes = q?.data?.items ?? [];
-    const qBy = new Map(quotes.map((x) => [String(x.symbol).toUpperCase(), x]));
-    const priceOf = (sym) => { const x = qBy.get(sym); if (!x) return null; if (x.last && x.last > 0) return x.last; if (x.mark && x.mark > 0) return x.mark; return null; };
-    const posOr = (v) => (v && v > 0 ? v : null);
-    const merge = (sym, weight) => ({ sym, weight, price: priceOf(sym), prevClose: posOr(qBy.get(sym)?.prevClose), open: posOr(qBy.get(sym)?.open) });
-    const semiRows = SEMIS.map((s) => merge(s.sym, s.weight));
-    const benchRows = new Map(BENCH.map((b) => [b, merge(b, 0)]));
-    const baseVal = (m, basis) => (basis === 'prevClose' ? m.prevClose : m.open);
-    const pct = (m, basis) => { const b = baseVal(m, basis); return m.price != null && b != null ? ((m.price - b) / b) * 100 : null; };
-    function buildView(basis) {
-      const rows = semiRows.map((m) => { const p = pct(m, basis); return { symbol: m.sym, weight: m.weight, price: m.price, baseline: baseVal(m, basis), pct: p, up: p == null ? null : p > 0 }; });
-      const valid = rows.filter((r) => r.pct != null);
-      const wSum = valid.reduce((a, r) => a + r.weight, 0);
-      const compositePct = wSum > 0 ? valid.reduce((a, r) => a + (r.weight / wSum) * r.pct, 0) : 0;
-      const names = rows.map((r) => ({ ...r, pct: r.pct == null ? null : r2(r.pct), contribution: r.pct == null || wSum <= 0 ? null : r2((r.weight / wSum) * r.pct) })).sort((a, b) => (b.contribution ?? -Infinity) - (a.contribution ?? -Infinity));
-      const ssi = toSSI(compositePct);
-      const breadthTotal = valid.length;
-      const breadthUp = valid.filter((r) => r.pct > 0).length;
-      const breadthPct = breadthTotal > 0 ? Math.round((breadthUp / breadthTotal) * 100) : null;
-      const smhPct = pct(benchRows.get('SMH'), basis), soxlPct = pct(benchRows.get('SOXL'), basis), spyPct = pct(benchRows.get('SPY'), basis), qqqPct = pct(benchRows.get('QQQ'), basis);
-      const rsSpx = smhPct != null && spyPct != null ? r2(smhPct - spyPct) : null;
-      const rsNq = smhPct != null && qqqPct != null ? r2(smhPct - qqqPct) : null;
-      let soxlConfirm = null;
-      if (smhPct != null && soxlPct != null) { const expected = r2(smhPct * 3); const ratio = Math.abs(expected) > 0.05 ? r2(soxlPct / expected) : null; const status = ratio == null ? 'flat' : ratio >= 0.9 ? 'confirming' : ratio >= 0.6 ? 'soft' : 'lagging'; soxlConfirm = { expected, actual: r2(soxlPct), ratio, status }; }
-      const divergence = compositePct > 0.1 && breadthPct != null && breadthPct < 50 ? 'narrow-up' : compositePct < -0.1 && breadthPct != null && breadthPct > 50 ? 'narrow-down' : 'aligned';
-      return { available: breadthTotal > 0, ssi, ssiLabel: ssiLabel(ssi), compositePct: r2(compositePct), breadthUp, breadthTotal, breadthPct, divergence, smhPct: smhPct == null ? null : r2(smhPct), soxlPct: soxlPct == null ? null : r2(soxlPct), spyPct: spyPct == null ? null : r2(spyPct), qqqPct: qqqPct == null ? null : r2(qqqPct), rsSpx, rsNq, soxlConfirm, names };
-    }
-    const rthOpen = buildView('open');
-    const rthOpenAvailable = benchRows.get('SMH').open != null && rthOpen.breadthTotal > 0;
-    send(res, 200, { source: 'tastytrade', updatedAt: new Date().toISOString(), rthOpenAvailable, prevClose: buildView('prevClose'), rthOpen }, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
-  },
-});
+// /api/semi-strength RETIRED 2026-10-10 with the v2 pages that called it (Vanilla/retired-2026-10-10/v2/).
 
 // /api/weather — ZIP → open-meteo (subscriber).
 const WMO = {
@@ -1258,47 +1155,7 @@ register('/api/yahoo-quotes', {
   },
 });
 
-// /api/insights/vix — Yahoo VIX/VIX1D/GSPC (subscriber).
-register('/api/insights/vix', {
-  auth: 'subscriber', methods: ['GET'],
-  async handler(req, res) {
-    try {
-      const H = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9', Origin: 'https://finance.yahoo.com', Referer: 'https://finance.yahoo.com/' };
-      async function fetchSeries(sym, range = '1y') {
-        const empty = { closes: [], last: null };
-        try {
-          const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=${range}&includePrePost=false&_=${Date.now()}`;
-          const r = await fetch(url, { headers: H, cache: 'no-store' });
-          if (!r.ok) return empty;
-          const data = await r.json(); const result = data?.chart?.result?.[0]; const meta = result?.meta;
-          if (!meta) return empty;
-          const raw = result?.indicators?.quote?.[0]?.close;
-          const closes = Array.isArray(raw) ? raw.filter(v => typeof v === 'number' && Number.isFinite(v)) : [];
-          const last = meta.regularMarketPrice ?? (closes.length ? closes[closes.length - 1] : null);
-          return { closes, last };
-        } catch { return empty; }
-      }
-      function realizedVol(values, period = 10) {
-        if (values.length < period + 1) return null;
-        const slice = values.slice(-(period + 1)); const rets = [];
-        for (let i = 1; i < slice.length; i++) rets.push(Math.log(slice[i] / slice[i - 1]));
-        const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
-        const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
-        return Math.sqrt(variance) * Math.sqrt(252) * 100;
-      }
-      const [vix, vix1d, spx] = await Promise.all([fetchSeries('^VIX', '1y'), fetchSeries('^VIX1D', '1mo'), fetchSeries('^GSPC', '1mo')]);
-      const vixSpot = vix.last; const vix1dVal = vix1d.last ?? vixSpot; const realized10d = realizedVol(spx.closes, 10);
-      let ivRank = null, ivPercentile = null;
-      if (vixSpot != null && vix.closes.length > 20) {
-        const hist = vix.closes; const min = Math.min(...hist); const max = Math.max(...hist);
-        if (max > min) ivRank = ((vixSpot - min) / (max - min)) * 100;
-        ivPercentile = (hist.filter(v => v < vixSpot).length / hist.length) * 100;
-      }
-      const round = (v, d = 2) => v == null || !isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d;
-      send(res, 200, { data: { vix_spot: round(vixSpot), vix_1d: round(vix1dVal), realized_10d: round(realized10d), iv_rank: round(ivRank, 1), iv_percentile: round(ivPercentile, 1), source: 'yahoo' } }, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
-    } catch (err) { send(res, 500, { error: String(err) }); }
-  },
-});
+// /api/insights/vix RETIRED 2026-10-10 with the v2 pages that called it (Vanilla/retired-2026-10-10/v2/).
 
 // /api/earnings-today — Yahoo visualization + quote caps (subscriber; 200 on failure).
 register('/api/earnings-today', {
@@ -1342,33 +1199,7 @@ register('/api/earnings-today', {
 const TC_EXCLUDE = ['executive time', 'pool call', 'in-town pool'];
 const TC_CACHE_TTL = 30 * 60 * 1000;
 let _tcCache = { body: [], ts: 0 };
-register('/api/trump-calendar', {
-  auth: 'subscriber', methods: ['GET'],
-  async handler(req, res) {
-    if (_tcCache.body.length && Date.now() - _tcCache.ts < TC_CACHE_TTL)
-      return send(res, 200, { events: _tcCache.body }, { 'X-Cache': 'HIT' });
-    try {
-      const r = await fetch('https://media-cdn.factba.se/rss/json/trump/calendar-full.json', { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' });
-      if (!r.ok) return send(res, 502, { events: [], error: `Upstream ${r.status}` });
-      const raw = await r.json();
-      const items = Array.isArray(raw) ? raw : (raw?.events ?? []);
-      const d = new Date(); const cutoff = d.toISOString().slice(0, 10);
-      const events = items
-        .filter(ev => (ev.date ?? '') >= cutoff)
-        .filter(ev => { const name = String(ev.details || ev.type || ev.daily_text || '').toLowerCase(); return !TC_EXCLUDE.some(x => name.includes(x)); })
-        .map(ev => {
-          const title = ev.details || ev.type || ev.daily_text || 'President Event';
-          const date = ev.date ?? ''; const rawTime = ev.time ?? '';
-          let time_formatted = rawTime ? rawTime : 'TBD';
-          if (rawTime && rawTime.includes(':')) { const [h, m] = rawTime.split(':').map(Number); const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 || 12; time_formatted = `${h12}:${String(m).padStart(2, '0')} ${ampm}`; }
-          return { date, time: rawTime, time_formatted, title, country: 'US', impact: 'President', forecast: '', previous: '', actual: '' };
-        })
-        .filter(ev => ev.date);
-      _tcCache = { body: events, ts: Date.now() };
-      send(res, 200, { events });
-    } catch (err) { send(res, 500, { events: [], error: err instanceof Error ? err.message : String(err) }); }
-  },
-});
+// /api/trump-calendar RETIRED 2026-10-10: no caller left after the v2 cut.
 
 // /api/cloudflare-metrics — owner card (env creds).
 register('/api/cloudflare-metrics', {
@@ -1526,224 +1357,7 @@ if (mcpServer) {
   catch (e) { console.warn('[api-router] ChatGPT connector routes not registered:', e.message); }
 }
 
-// /api/market-scanner — multi-ticker regime/scoring scan (Yahoo series + live
-// SPX GEX via in-process /proxy/gex). Pure compute, no DB. Ported verbatim from
-// app/api/market-scanner/route.ts.
-register('/api/market-scanner', {
-  auth: 'owner', methods: ['GET'],
-  async handler(req, res, ctx) {
-    const YAHOO_HEADERS = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9',
-      Origin: 'https://finance.yahoo.com', Referer: 'https://finance.yahoo.com/',
-    };
-    const emptySeries = () => ({ closes: [], timestamps: [], last: null, prevClose: null, change: null, pct: null });
-    async function fetchYahoo(sym, range = '1y') {
-      try {
-        const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=${range}&includePrePost=false`;
-        const r = await fetch(url, { headers: YAHOO_HEADERS, cache: 'no-store' });
-        if (!r.ok) return emptySeries();
-        const data = await r.json();
-        const result = data?.chart?.result?.[0];
-        if (!result) return emptySeries();
-        const meta = result.meta ?? {};
-        const raw = result.indicators?.quote?.[0]?.close ?? [];
-        const closes = raw.filter((v) => typeof v === 'number' && isFinite(v));
-        const timestamps = Array.isArray(result.timestamp) ? result.timestamp : [];
-        const last = meta.regularMarketPrice ?? (closes.length ? closes[closes.length - 1] : null);
-        const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? (closes.length > 1 ? closes[closes.length - 2] : null);
-        const change = last != null && prevClose != null ? last - prevClose : null;
-        const pct = change != null && prevClose ? (change / prevClose) * 100 : null;
-        return { closes, timestamps, last, prevClose, change, pct };
-      } catch { return emptySeries(); }
-    }
-    const ivRank = (current, series) => {
-      if (!series.length || current == null) return null;
-      const lo = Math.min(...series), hi = Math.max(...series);
-      if (hi === lo) return 50;
-      return Math.round(((current - lo) / (hi - lo)) * 100);
-    };
-    const realizedVol = (closes, period = 20) => {
-      if (closes.length < period + 1) return null;
-      const slice = closes.slice(-(period + 1)); const rets = [];
-      for (let i = 1; i < slice.length; i++) rets.push(Math.log(slice[i] / slice[i - 1]));
-      const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
-      const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / rets.length;
-      return Math.round(Math.sqrt(variance * 252) * 100 * 10) / 10;
-    };
-    const trendSlope = (closes, period = 20) => {
-      if (closes.length < 2) return 0;
-      const s = closes.slice(-period); const n = s.length;
-      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-      for (let i = 0; i < n; i++) { sumX += i; sumY += s[i]; sumXY += i * s[i]; sumX2 += i * i; }
-      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-      return (slope / (s[0] || 1)) * 100;
-    };
-    const momentum = (closes) => {
-      if (closes.length < 20) return 'neutral';
-      const avg5 = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-      const avg20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-      const slope = trendSlope(closes, 20); const diff = (avg5 - avg20) / avg20;
-      if (Math.abs(slope) > 0.1 && Math.abs(diff) > 0.005) return 'strong';
-      if (Math.abs(diff) < 0.002 && Math.abs(slope) < 0.05) return 'weakening';
-      return 'neutral';
-    };
-    const extensionLevel = (closes) => {
-      if (closes.length < 20) return 'neutral';
-      const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-      const last = closes[closes.length - 1]; const pct = (last - ma20) / ma20;
-      if (Math.abs(pct) > 0.04) return 'extended';
-      if (Math.abs(pct) < 0.01) return 'contracted';
-      return 'neutral';
-    };
-    const pcrLookup = (ivr, trend) => {
-      const base = 1.0 + (ivr - 50) * 0.005;
-      if (trend === 'up') return Math.round((base - 0.1) * 100) / 100;
-      if (trend === 'down') return Math.round((base + 0.1) * 100) / 100;
-      return Math.round(base * 100) / 100;
-    };
-    const emptyGex = {
-      gexFlip: null, gexPer1pct: null, maxGexStrike: null, gexExpiringPct: null, gexExpiringDate: null,
-      callWall: null, putWall: null, callsOI: null, putsOI: null, pcrOI: null, callSpec: null,
-    };
-    async function fetchGexSnap() {
-      try {
-        const r = await ctx.internalFetch('/proxy/gex', { cache: 'no-store' });
-        if (!r.ok) return emptyGex;
-        const v = await r.json();
-        const chain = v.gexRows ?? [];
-        let callsOI = 0, putsOI = 0, callsVol = 0, putsVol = 0;
-        chain.forEach((row) => {
-          callsOI += row.callOI ?? 0; putsOI += row.putOI ?? 0;
-          callsVol += row.callVolume ?? 0; putsVol += row.putVolume ?? 0;
-        });
-        const totalOI = callsOI + putsOI, totalVol = callsVol + putsVol;
-        const pcrOI = putsOI > 0 && callsOI > 0 ? Math.round((putsOI / callsOI) * 100) / 100 : null;
-        const callSpec = totalVol > 0 ? Math.round((callsVol / totalVol) * 100) : totalOI > 0 ? Math.round((callsOI / totalOI) * 100) : null;
-        let maxGexStrike = null, maxGex = -Infinity;
-        chain.forEach((row) => { const g = Math.abs(row.netGEX ?? 0); if (g > maxGex) { maxGex = g; maxGexStrike = row.strike; } });
-        const spot = v.spot ?? null;
-        const gexPer1pct = v.totalNetGex != null && spot && spot > 0 ? Math.round((v.totalNetGex / (spot * 0.01)) / 1e9 * 100) / 100 : null;
-        return {
-          gexFlip: v.gexFlip ?? null, gexPer1pct, maxGexStrike, gexExpiringPct: null,
-          gexExpiringDate: v.expiry ?? null, callWall: v.callWall ?? null, putWall: v.putWall ?? null,
-          callsOI: callsOI || null, putsOI: putsOI || null, pcrOI, callSpec,
-        };
-      } catch { return emptyGex; }
-    }
-    function computeAnalytics(sym, spot, closes, ivr, rv20, iv1dChange, gex) {
-      const slope = trendSlope(closes, 20), mom = momentum(closes), ext = extensionLevel(closes);
-      const ivrN = ivr ?? 50;
-      const trend = slope > 0.08 ? 'up' : slope < -0.08 ? 'down' : 'sideways';
-      let alignment = 'neutral';
-      if (gex.gexFlip != null) {
-        const aboveFlip = spot > gex.gexFlip;
-        if (trend === 'up' && aboveFlip) alignment = 'aligned';
-        else if (trend === 'down' && !aboveFlip) alignment = 'aligned';
-        else if (trend !== 'sideways') alignment = 'conflicting';
-      }
-      let regime;
-      if (trend === 'sideways') regime = 'RANGE BOUND';
-      else if (ivrN > 60) regime = 'TRENDING HIGH VOL';
-      else regime = 'TRENDING LOW VOL';
-      let marketStructure;
-      if (ext === 'extended' && alignment === 'conflicting') marketStructure = 'MEAN REVERSION FAVORED';
-      else if (ivrN > 65 && mom === 'strong') marketStructure = 'VOLATILITY EXPANSION RISK';
-      else if (trend !== 'sideways' && alignment === 'aligned') marketStructure = 'TREND CONTINUATION LIKELY';
-      else marketStructure = 'MIXED / WATCH';
-      let direction;
-      if (ext === 'extended' && mom === 'weakening') direction = 'NEUTRAL';
-      else if (trend === 'up') direction = 'LONG';
-      else if (trend === 'down') direction = 'SHORT';
-      else direction = 'NEUTRAL';
-      let strategy;
-      if (ivrN > 55 && alignment === 'conflicting') strategy = 'VOL PREMIUM';
-      else if (ext === 'extended' && mom === 'weakening') strategy = 'MEAN REVERSION';
-      else if (trend !== 'sideways' && mom === 'strong' && ivrN < 50) strategy = 'DIRECTIONAL';
-      else if (trend === 'sideways' && ivrN < 35) strategy = 'PASS';
-      else strategy = 'MEAN REVERSION';
-      if (sym === 'VIX') {
-        direction = 'NEUTRAL';
-        strategy = ivrN > 50 ? 'VOL PREMIUM' : 'PASS';
-        if (trend === 'up') regime = 'VOLATILITY EXPANSION';
-        else if (trend === 'down') regime = 'VOL COMPRESSION';
-      }
-      const THESIS = {
-        'VOL PREMIUM': 'Sell premium, fade extensions, collect decay',
-        'MEAN REVERSION': 'Fade extensions, target MA mean reversion',
-        'DIRECTIONAL': 'Long breakouts, buy dips to MA',
-        'PASS': 'Long with defined risk, reduced size; tighten stops',
-      };
-      const thesis = THESIS[strategy] ?? 'Monitor; conflicting signals';
-      let score = 5;
-      if (trend !== 'sideways') score += 1;
-      if (mom === 'strong') score += 1;
-      if (alignment === 'aligned') score += 1;
-      if (alignment === 'conflicting') score -= 1;
-      if (ext === 'extended') score -= 1;
-      if (ivrN > 60) score += 1;
-      if (strategy === 'PASS') score = Math.min(score, 2);
-      if (sym === 'VIX') score = Math.round(ivrN / 10);
-      score = Math.max(0, Math.min(10, score));
-      const rating = strategy === 'PASS' ? 'PASS' : score >= 6 ? 'HIGH' : 'LOW';
-      const approxIV = ivrN * 0.8 + 10;
-      const em1d = spot ? Math.round((spot * (approxIV / 100) * Math.sqrt(1 / 365)) * 10) / 10 : null;
-      const em1w = spot ? Math.round((spot * (approxIV / 100) * Math.sqrt(7 / 365)) * 10) / 10 : null;
-      const em30d = spot ? Math.round((spot * (approxIV / 100) * Math.sqrt(30 / 365)) * 10) / 10 : null;
-      const pcIvRatio = pcrLookup(ivrN, trend);
-      const pcIvSpread = Math.round((pcIvRatio - 1) * 100) / 1000;
-      const pcrVol = pcrLookup(ivrN, trend) * (trend === 'up' ? 0.85 : 1.1);
-      return {
-        score, rating, direction, strategy, thesis, regime, marketStructure,
-        em1d, em1w, em30d, trend, momentum: mom, extension: ext, alignment,
-        pcIvRatio, pcIvSpread, pcrVol: Math.round(pcrVol * 100) / 100, pcrDelta30d: null,
-      };
-    }
-    function buildTicker(sym, series, ivr, rv20, iv1dChange, gex, now) {
-      const spot = series.last;
-      if (!spot || series.closes.length < 5) {
-        return {
-          symbol: sym, spot, change1d: series.change, pct1d: series.pct,
-          score: 0, rating: 'PASS', direction: 'NEUTRAL', strategy: 'PASS', thesis: 'Data unavailable',
-          regime: 'UNKNOWN', marketStructure: 'UNKNOWN', ivRank: ivr, iv1dChange, callSpec: gex.callSpec,
-          em1d: null, em1w: null, em30d: null, trend: 'sideways', momentum: 'neutral', extension: 'neutral',
-          realizedVol20d: rv20, alignment: 'neutral', gexFlip: gex.gexFlip, gexPer1pct: gex.gexPer1pct,
-          maxGexStrike: gex.maxGexStrike, gexExpiringPct: gex.gexExpiringPct, gexExpiringDate: gex.gexExpiringDate,
-          pcIvRatio: null, pcIvSpread: null, callsOI: gex.callsOI, putsOI: gex.putsOI,
-          pcrOI: gex.pcrOI, pcrVol: null, pcrDelta30d: null, updatedAt: now,
-        };
-      }
-      const computed = computeAnalytics(sym, spot, series.closes, ivr, rv20, iv1dChange, gex);
-      return {
-        symbol: sym, spot, change1d: series.change, pct1d: series.pct, ivRank: ivr, iv1dChange,
-        realizedVol20d: rv20, callSpec: gex.callSpec, gexFlip: gex.gexFlip, gexPer1pct: gex.gexPer1pct,
-        maxGexStrike: gex.maxGexStrike, gexExpiringPct: gex.gexExpiringPct, gexExpiringDate: gex.gexExpiringDate,
-        callsOI: gex.callsOI, putsOI: gex.putsOI, pcrOI: gex.pcrOI, ...computed, updatedAt: now,
-      };
-    }
-    try {
-      const [spxS, spyS, qqqS, vixS, vxnS, vvixS] = await Promise.all([
-        fetchYahoo('^GSPC'), fetchYahoo('SPY'), fetchYahoo('QQQ'), fetchYahoo('^VIX'),
-        fetchYahoo('^VXN').catch(() => emptySeries()), fetchYahoo('^VVIX').catch(() => emptySeries()),
-      ]);
-      const gexSnap = await fetchGexSnap();
-      const vixCurrent = vixS.last ?? 20, vxnCurrent = vxnS.last ?? vixCurrent, vvixCurrent = vvixS.last ?? 80;
-      const spxIvr = ivRank(vixCurrent, vixS.closes);
-      const spyIvr = ivRank(vixCurrent, vixS.closes);
-      const qqqIvr = ivRank(vxnCurrent, vxnS.closes.length > 50 ? vxnS.closes : vixS.closes);
-      const vixIvr = ivRank(vvixCurrent, vvixS.closes.length > 50 ? vvixS.closes : vixS.closes);
-      const spxRv = realizedVol(spxS.closes), spyRv = realizedVol(spyS.closes), qqqRv = realizedVol(qqqS.closes), vixRv = realizedVol(vixS.closes);
-      const now = new Date().toISOString();
-      const results = [
-        buildTicker('SPX', spxS, spxIvr, spxRv, vixS.change, gexSnap, now),
-        buildTicker('SPY', spyS, spyIvr, spyRv, vixS.change, emptyGex, now),
-        buildTicker('QQQ', qqqS, qqqIvr, qqqRv, vxnS.change, emptyGex, now),
-        buildTicker('VIX', vixS, vixIvr, vixRv, vvixS.change, emptyGex, now),
-      ];
-      send(res, 200, { tickers: results, updatedAt: now }, { 'Cache-Control': NO_STORE });
-    } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
-  },
-});
+// /api/market-scanner RETIRED 2026-10-10: no caller left after the v2 cut.
 
 // /api/prev-closes, /api/gex-top3, /api/estimated-move — legacy 501 stubs
 // (GET+POST "not implemented"), ported verbatim. Kept subscriber to match the
@@ -2083,19 +1697,7 @@ register('/api/gex', {
 {
   const EVENTS_PATH = nodePath.join(process.cwd(), 'app/api/econ-calendar/events.json');
   const readEvents = () => { try { return JSON.parse(fs.readFileSync(EVENTS_PATH, 'utf-8')); } catch { return []; } };
-  register('/api/econ-calendar', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
-    async handler(req, res) {
-      if (req.method === 'GET') { send(res, 200, readEvents(), { 'Cache-Control': 'no-store' }); return; }
-      try {
-        const body = await readJson(req);
-        const events = Array.isArray(body) ? body : body.events;
-        if (!Array.isArray(events)) { send(res, 400, { error: 'Expected array or { events: [] }' }); return; }
-        fs.writeFileSync(EVENTS_PATH, JSON.stringify(events, null, 2), 'utf-8');
-        send(res, 200, { ok: true, count: events.length });
-      } catch (err) { send(res, 500, { error: err instanceof Error ? err.message : String(err) }); }
-    },
-  });
+  // /api/econ-calendar RETIRED 2026-10-10: no caller left after the v2 cut.
 }
 
 // /api/whats-new — owner-only DELETE to strike one bullet from
@@ -4457,29 +4059,7 @@ Rules:
   },
 });
 
-// /api/strike-summary — 1-2 sentence GEX blurb per strike via Anthropic (Haiku).
-// POST, subscriber. Ported verbatim from app/api/strike-summary/route.ts.
-register('/api/strike-summary', {
-  auth: 'subscriber', methods: ['POST'],
-  async handler(req, res) {
-    const MODEL = 'claude-haiku-4-5-20251001';
-    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-    const SYSTEM = `You are CB Edge, an SPX GEX desk. Write exactly 1-2 sentences about this strike level. Format: "[strike] is a [CB/support/resistance/flip] level. [What price should do here based on net GEX — reach/pivot/pin/amplify]." Be blunt and specific. Use the actual numbers. No disclaimers, no fluff. Example tone: "7540 CB level here. Market should reach or pivot if net GEX stays positive."`;
-    try {
-      const { strike, spotPrice, oiVolGex, volGex, otmSide, otmPrice } = await readJson(req);
-      const user = `Strike: ${strike} | SPX Spot: ${spotPrice}\nOI+Vol GEX: ${oiVolGex} | Vol GEX: ${volGex}\nOTM ${otmSide} contract: ${otmPrice ?? 'N/A'}`;
-      const r = await fetch(ANTHROPIC_URL, {
-        method: 'POST',
-        headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY ?? '', 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: MODEL, max_tokens: 120, system: SYSTEM, messages: [{ role: 'user', content: user }] }),
-      });
-      if (!r.ok) { send(res, 200, { summary: null }); return; }
-      const data = await r.json();
-      const summary = data?.content?.[0]?.text?.trim() ?? null;
-      send(res, 200, { summary });
-    } catch { send(res, 200, { summary: null }); }
-  },
-});
+// /api/strike-summary RETIRED 2026-10-10: no caller left after the v2 cut.
 
 // /api/premarket-movers — top-5 up/down across the trading watchlist via
 // in-process /proxy/quotes (extended-hours aware). Ported verbatim from
@@ -5315,33 +4895,7 @@ if (libDb) {
   // the supabase import is dropped. All subscriber-gated (middleware already
   // required a paid session for these — none are in PAID_EXEMPT).
 
-  // /api/positioning-tickers — /test Positioning tab, exactly 4 tickers.
-  register('/api/positioning-tickers', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
-    async handler(req, res, ctx, access) {
-      const userId = access.userId;
-      if (!userId) return send(res, 401, { error: 'Unauthorized' });
-      if (req.method === 'POST') {
-        try {
-          const body = await readJson(req);
-          const seen = new Set(), tickers = [];
-          for (const it of (Array.isArray(body?.tickers) ? body.tickers : [])) {
-            const sym = String(it ?? '').trim().toUpperCase().slice(0, 12);
-            if (!sym || seen.has(sym) || !/^[A-Z0-9/.^-]+$/.test(sym)) continue;
-            seen.add(sym); tickers.push(sym);
-            if (tickers.length >= 4) break;
-          }
-          if (tickers.length !== 4) return send(res, 400, { error: 'Exactly 4 distinct tickers required' });
-          await libDb.upsertPositioningTickers(userId, tickers);
-          return send(res, 200, { ok: true, tickers });
-        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
-      }
-      try {
-        const tickers = await libDb.getPositioningTickers(userId);
-        send(res, 200, { tickers }, { 'Cache-Control': 'private, max-age=30' });
-      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
-    },
-  });
+  // /api/positioning-tickers RETIRED 2026-10-10: no caller left after the v2 cut.
 
   // /api/quote-symbols — toolbar Quotes dropdown, up to 40 { sym, label }.
   register('/api/quote-symbols', {
@@ -5373,27 +4927,7 @@ if (libDb) {
     },
   });
 
-  // /api/ict-prefs — per-user /ict glossary hidden-card ids.
-  register('/api/ict-prefs', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
-    async handler(req, res, ctx, access) {
-      const userId = access.userId;
-      if (!userId) return send(res, 401, { error: 'Unauthorized' });
-      if (req.method === 'POST') {
-        try {
-          const body = await readJson(req);
-          const hiddenCards = Array.isArray(body.hiddenCards)
-            ? body.hiddenCards.map((x) => String(x)).slice(0, 200) : [];
-          await libDb.upsertIctCardPrefs(userId, hiddenCards);
-          return send(res, 200, { ok: true });
-        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
-      }
-      try {
-        const hiddenCards = await libDb.getIctCardPrefs(userId);
-        send(res, 200, { hiddenCards });
-      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
-    },
-  });
+  // /api/ict-prefs RETIRED 2026-10-10 with the v2 pages that called it (Vanilla/retired-2026-10-10/v2/).
 
   // /api/level-log-tickers — the /v3/level-log ticker CARD RAIL, per user.
   //
@@ -8265,33 +7799,7 @@ if (libDb) {
     });
   }
 
-  // /api/tpo-forecast — k-NN TPO day forecast (bundled from lib/tpo-forecast-compute.ts).
-  if (libTpoForecast) {
-    register('/api/tpo-forecast', {
-      auth: 'subscriber', methods: ['GET'],
-      async handler(req, res) {
-        try {
-          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-          const r = await libTpoForecast.computeTpoForecast(sp);
-          send(res, r.status ?? 200, r.body, { 'Cache-Control': 'no-store' });
-        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
-      },
-    });
-  }
-
-  // /api/obook — order-book tenor-split read (bundled from lib/obook-compute.ts).
-  if (libObook) {
-    register('/api/obook', {
-      auth: 'subscriber', methods: ['GET'],
-      async handler(req, res) {
-        try {
-          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-          const r = await libObook.computeObook(sp);
-          send(res, r.status ?? 200, r.body, r.headers || {});
-        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
-      },
-    });
-  }
+  // /api/tpo-forecast and /api/obook RETIRED 2026-10-10 with the v2 pages that called them.
 
   // /api/snapshots/option-strike-gex-history — heatmap/point/rolling reads of the
   // append-only option_strike_gex_history table + POST recorder. Ported verbatim
@@ -8691,204 +8199,7 @@ if (libDb) {
   // a helper to the source would mean regenerating the bundle, which would drop
   // symbol support and break SPY/QQQ. Nothing here needs that regeneration.
   if (libDb) {
-    register('/api/strike-gex-series', {
-      auth: 'subscriber', methods: ['GET'],
-      async handler(req, res) {
-        try {
-          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-          const symbol = libDb.normGexSymbol(sp.get('symbol'));
-          const mode = sp.get('mode') ?? 'series';
-
-          // Which (date, expiry) sessions actually have rows. Retention in
-          // insertOptionStrikeGexRows prunes to ~2 days, so this list is short
-          // by design — do NOT present it as a full history picker.
-          //
-          // This is a LOOSE INDEX SCAN (a.k.a. skip scan), not a GROUP BY, and
-          // the difference is the whole reason the page used to hang.
-          //
-          // The obvious query — `SELECT date, expiry, COUNT(*) … GROUP BY date,
-          // expiry` — has to visit EVERY row to compute the counts. On this
-          // table that is ~3.1M index entries read to produce 21 output rows,
-          // which measured at 150s under load and tripped a 20s
-          // statement_timeout even idle. Since the pool is capped at max:5, two
-          // page loads were enough to starve every other query on the server.
-          //
-          // Instead: walk idx_osgh_symbol_lookup (symbol, date, expiry, …) one
-          // hop at a time. Seed with the newest pair, then repeatedly ask for
-          // the greatest pair strictly less than the last one — each hop is an
-          // index descent with LIMIT 1. Cost is O(number of pairs), not
-          // O(rows): 21 lookups, milliseconds, on the index that already exists.
-          //
-          // The row-comparison `(date, expiry) < (date, expiry)` is what keeps
-          // it sargable — it maps onto the index's own (date, expiry) ordering.
-          // Rewriting it as `date < ? OR (date = ? AND expiry < ?)` would NOT;
-          // the planner loses the range and falls back to a full scan.
-          //
-          // `snaps` is dropped. It was never rendered — StrikeHistory.tsx's
-          // picker labels off date/expiry alone — and it was the entire reason
-          // the old query had to touch every row. StrikeMeta.snaps (the strike
-          // dropdown's count) is a different field and is unaffected.
-          if (mode === 'meta') {
-            const metaRows = await libDb.queryAll(
-              `WITH RECURSIVE pairs AS (
-                 (SELECT date, expiry
-                    FROM option_strike_gex_history
-                   WHERE symbol = ?
-                   ORDER BY date DESC, expiry DESC
-                   LIMIT 1)
-                 UNION ALL
-                 SELECT nxt.date, nxt.expiry
-                   FROM pairs p
-                   CROSS JOIN LATERAL (
-                     SELECT h.date, h.expiry
-                       FROM option_strike_gex_history h
-                      WHERE h.symbol = ?
-                        AND (h.date, h.expiry) < (p.date, p.expiry)
-                      ORDER BY h.date DESC, h.expiry DESC
-                      LIMIT 1
-                   ) nxt
-               )
-               SELECT date, expiry FROM pairs ORDER BY date DESC, expiry ASC`,
-              [symbol, symbol]
-            );
-            send(res, 200, {
-              mode: 'meta', symbol,
-              // snaps is reported as 0 rather than omitted so the DayMeta shape
-              // the client types against stays intact. Nothing reads it.
-              days: metaRows.map((r) => ({
-                date: String(r.date), expiry: String(r.expiry), snaps: 0,
-              })),
-            });
-            return;
-          }
-
-          const date = sp.get('date') ?? todayET();
-          const expiry = sp.get('expiry') ?? '';
-          if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }
-
-          if (mode === 'strikes') {
-            const strikeRows = await libDb.queryAll(
-              `SELECT strike, COUNT(*)::int AS snaps, AVG(net_gex) AS avg_net_gex
-                 FROM option_strike_gex_history
-                WHERE symbol = ? AND date = ? AND expiry = ?
-                GROUP BY strike
-                ORDER BY strike ASC`,
-              [symbol, date, expiry]
-            );
-            send(res, 200, {
-              mode: 'strikes', symbol, date, expiry,
-              strikes: strikeRows.map((r) => ({
-                strike: Number(r.strike),
-                snaps: Number(r.snaps ?? 0),
-                avgNetGex: Number(r.avg_net_gex ?? 0),
-              })),
-            });
-            return;
-          }
-
-          const strike = Number(sp.get('strike'));
-          if (!Number.isFinite(strike) || strike <= 0) {
-            send(res, 200, { error: 'strike is required', rows: [] });
-            return;
-          }
-          // IV skew needs an ATM reference AT EACH SNAPSHOT, not one for the
-          // session: spot moves, so the strike nearest spot changes during the
-          // day, and pinning ATM to a single strike would smear that drift into
-          // the skew line. So: per timestamp, the strike with the smallest
-          // |strike − spot| — the chosen ATM definition — and the call/put
-          // average IV there as the reference.
-          //
-          // Main select is covered by idx_osgh_symbol_lookup
-          // (symbol, date, expiry, strike, timestamp DESC).
-          //
-          // ─── DO NOT "optimise" the ATM CTE. Two rewrites measured WORSE. ──
-          //
-          // The ORDER BY on ABS(strike − spot) looks like an obvious problem —
-          // it is a computed expression, so no index can satisfy that sort, and
-          // this query was caught in pg_stat_activity at 10m23s while the page
-          // hung. Both tempting fixes were built and benchmarked against a
-          // prod-shaped session (800 strikes × 600 snapshots, work_mem 4MB).
-          // Buffers read, lower is better:
-          //
-          //   this query, as written .................... 11,684  (227ms)
-          //   per-timestamp LATERAL, ±50 strike band .... 91,398
-          //   session-wide spot band as index bound ..... 24,078
-          //
-          // Why this one wins: idx_osgh_symbol_snap is
-          // (symbol, date, expiry, timestamp) INCLUDE (spot), and rows are
-          // INSERTED in timestamp order — so scanning it walks the heap
-          // sequentially, ~43 rows per page, and PG13+ turns the sort into an
-          // Incremental Sort (presorted on timestamp, quicksort only within
-          // each timestamp group — 68kB peak, never spills).
-          //
-          // Both alternatives lose on heap correlation, not on row count. The
-          // band version reads 32× fewer ROWS but drives them through
-          // idx_osgh_symbol_lookup, which is ordered by STRIKE — consecutive
-          // index entries then point at scattered heap pages, ~1 page per row,
-          // and it needs two extra full scans for the min/max spot bounds.
-          //
-          // So when this query is slow in prod, it is NOT the plan. Check, in
-          // order: (1) index bloat — this table takes daily mass-DELETEs from
-          // pruneOptionStrikeGexHistory and reached 2.6GB of index on a 501MB
-          // heap, at which point the same plan read the same rows at ~1.6MB/s;
-          // (2) whether autovacuum is keeping up; (3) statement_timeout, which
-          // is what stops one slow run from pinning a pool slot (the pool is
-          // max:5, so ~two of these were enough to starve the whole server and
-          // hang even the cheap mode=meta call above).
-          const seriesRows = await libDb.queryAll(
-            `WITH atm AS (
-               SELECT DISTINCT ON (timestamp)
-                      timestamp,
-                      strike AS atm_strike,
-                      COALESCE((call_iv + put_iv) / 2.0, call_iv, put_iv) AS atm_iv
-                 FROM option_strike_gex_history
-                WHERE symbol = ? AND date = ? AND expiry = ?
-                  AND spot IS NOT NULL AND spot > 0
-                  AND (call_iv IS NOT NULL OR put_iv IS NOT NULL)
-                ORDER BY timestamp, ABS(strike - spot) ASC
-             )
-             SELECT h.timestamp, h.spot, h.net_gex, h.net_vol_gex,
-                    h.call_gamma, h.put_gamma, h.call_iv, h.put_iv,
-                    a.atm_strike, a.atm_iv
-               FROM option_strike_gex_history h
-               LEFT JOIN atm a ON a.timestamp = h.timestamp
-              WHERE h.symbol = ? AND h.date = ? AND h.expiry = ? AND h.strike = ?
-              ORDER BY h.timestamp ASC`,
-            [symbol, date, expiry, symbol, date, expiry, strike]
-          );
-          const num = (v) => (v == null ? null : Number(v));
-          send(res, 200, {
-            mode: 'series', symbol, date, expiry, strike,
-            // ATM reference is the strike nearest spot at each snapshot; IV at
-            // both K and ATM is the call/put average, so the subtraction is
-            // like-for-like rather than call-IV minus a blended reference.
-            atmRule: 'nearest-strike-to-spot',
-            rows: seriesRows.map((r) => {
-              const callIv = num(r.call_iv);
-              const putIv = num(r.put_iv);
-              const ivK = callIv != null && putIv != null ? (callIv + putIv) / 2 : (callIv ?? putIv);
-              const atmIv = num(r.atm_iv);
-              // Skew is null unless BOTH legs of the subtraction exist — a
-              // missing ATM reading must not silently render as "zero skew".
-              const skew = ivK != null && atmIv != null ? ivK - atmIv : null;
-              return {
-                t: Number(r.timestamp),
-                spot: num(r.spot),
-                netGex: Number(r.net_gex ?? 0),
-                netVolGex: num(r.net_vol_gex),
-                callGamma: num(r.call_gamma),
-                putGamma: num(r.put_gamma),
-                callIv, putIv, ivK,
-                atmStrike: num(r.atm_strike),
-                atmIv,
-                skew,
-                skewPct: skew != null && atmIv ? skew / atmIv : null,
-              };
-            }),
-          });
-        } catch (err) { send(res, 200, { error: String(err), rows: [] }); }
-      },
-    });
+    // /api/strike-gex-series RETIRED 2026-10-10 with the v2 pages that called it (Vanilla/retired-2026-10-10/v2/).
   }
 
 
@@ -14271,30 +13582,7 @@ if barstate.islast
     },
   });
 
-  // /api/flow/calls — options-flow recorder + reader. POST inserts, GET reads by
-  // date. Ported verbatim from app/api/flow/calls/route.ts. Subscriber (POST via
-  // token bypass).
-  register('/api/flow/calls', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
-    async handler(req, res) {
-      if (req.method === 'POST') {
-        try {
-          const body = await readJson(req);
-          const calls = Array.isArray(body) ? body : [body];
-          await libDb.insertFlowCalls(calls);
-          send(res, 200, { ok: true, count: calls.length });
-        } catch (e) { send(res, 500, { error: String(e) }); }
-        return;
-      }
-      try {
-        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-        const date = sp.get('date') ?? new Date().toISOString().slice(0, 10);
-        const limit = Number(sp.get('limit') ?? 500);
-        const rows = await libDb.getFlowCalls(date, limit);
-        send(res, 200, rows);
-      } catch (e) { send(res, 500, { error: String(e) }); }
-    },
-  });
+  // /api/flow/calls RETIRED 2026-10-10: no caller left after the v2 cut.
 
   // /api/db — generic table browser (information_schema validated). Ported
   // verbatim from app/api/db/route.ts. Subscriber to match middleware's /api/*

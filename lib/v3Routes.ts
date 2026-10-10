@@ -148,6 +148,14 @@ export const PORTED: Record<string, string> = {
   "/m/es": "/m/spx",
   "/m/em": "/m/em",
   "/m/econ": "/m/econ",
+
+  // v2 copies retired 2026-10-10 — send old links to the v3 page of the same job.
+  "/level-log": "/level-log",
+  "/m/chain": "/options-chain",
+  // No v3 page — old links land on the board instead of a 404.
+  "/strike-history": "/",
+  "/confidence-score": "/",
+  "/greeks": "/",
 };
 
 /** One entry in the Legacy menu / the /v3/legacy list. */
@@ -182,12 +190,9 @@ export interface LegacyNavItem {
 // here. It is deliberately NOT in PORTED — /app/level-log must keep rendering
 // v2. Only the bare /level-log alias points at v3, in next.config.js.
 export const LEGACY_NAV: LegacyNavItem[] = [
+  // 2026-10-10: Level Log, Strike History, Confidence Score and /m/chain retired.
   { path: "/levels", label: "Levels", icon: "📏" },
-  { path: "/level-log", label: "Level Log", icon: "🧱", partial: true },
-  { path: "/strike-history", label: "Strike History", icon: "🕘" },
-  { path: "/confidence-score", label: "Confidence Score", icon: "📐" },
   { path: "/test", label: "Test Lab", icon: "⚗️" },
-  { path: "/m/chain", label: "Option Chain (phone)", icon: "⛓️", phone: true },
 ];
 
 /** One destination in v3's rail, mirrored for the bar v2 pages wear. */

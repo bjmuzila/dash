@@ -99,8 +99,8 @@
   opacity: 1;
 }
 .cb-wla .cb-wla-tab[aria-selected='true'] {
+  /* no accent underline (2026-10-10): the raised face alone marks the tab */
   background: var(--color-raised);
-  box-shadow: inset 0 -2px 0 var(--color-accent);
   color: var(--color-fg);
   opacity: 1;
 }
@@ -121,7 +121,7 @@
 }
 .cb-wla .cb-wla-input:focus {
   outline: none;
-  border-color: var(--color-accent);
+  border-color: var(--color-faint);
 }
 .cb-wla .cb-wla-input.bad {
   border-color: var(--color-down);
@@ -181,16 +181,8 @@
   background: var(--color-raised);
 }
 .cb-wla .cb-wla-primary {
-  /* Voltick's lit pill: the face paints to the padding box, the aurora rim to the border box */
-  border: 1px solid transparent;
-  background:
-    linear-gradient(var(--vt-pill-face), var(--vt-pill-face)) padding-box,
-    var(--vt-lit-rim) border-box;
-  box-shadow: 0 0 18px -8px var(--color-vt-accent);
+  /* a plain toolbar button, a touch heavier (2026-10-10: the lit rim and glow are gone) */
   font-weight: 600;
-}
-.cb-wla .cb-wla-primary:hover {
-  box-shadow: 0 0 22px -6px var(--color-vt-accent);
 }
 .cb-wla .cb-wla-back {
   display: none;
