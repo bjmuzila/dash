@@ -20,6 +20,11 @@ import { useIsMobile } from "../hooks/useIsMobile";
  *
  * Colour: up = OWNER_THEME.green, degraded / cert under 21 d = gold,
  * down = red. Secondary text green, recessive step cyan (AGENTS.md).
+ *
+ * DAILY (2026-10-10, Brandon, from the UptimeRobot status page): a row of day
+ * bars per monitor, the last 90 New York days (30 on a phone), today on the
+ * right. Each bar is that day's uptime from `monitor.daily`; a day before the
+ * monitor existed is a grey bar, not a green one. Hover a bar for the day.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -33,6 +38,9 @@ interface Monitor {
   responseTimes: { at: number; ms: number }[];
   ssl: { expiresAt: number; brand: string | null } | null;
   logs: UptimeLog[];
+  createdAt?: number | null;
+  /** One entry per New York day, oldest first; uptime null = before the monitor existed. */
+  daily?: { day: string; uptime: number | null }[] | null;
 }
 interface Site { key: string; label: string; env: string; configured: boolean; monitors: Monitor[]; errors?: string[] }
 interface UptimeBody { asOf: string; heldAt: number; holdMs: number; sites: Site[]; error?: string }
@@ -117,10 +125,59 @@ function Spark({ pts }: { pts: { at: number; ms: number }[] }) {
   );
 }
 
+/** One day's bar: green at 99.9%+, gold to 99%, red under, grey with no data. */
+function dayColor(u: number | null): string {
+  if (u == null) return ownerRgba("#FFFFFF", 0.14);
+  return LEVEL_COLOR[uptimeLevel(u)];
+}
+
+function dayTip(d: { day: string; uptime: number | null }): string {
+  const date = new Date(`${d.day}T12:00:00Z`).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  if (d.uptime == null) return `${date} · no data (before this monitor existed)`;
+  const down = ((100 - d.uptime) / 100) * 86_400;
+  return `${date} · ${d.uptime.toFixed(3)}%${d.uptime < 100 ? ` · about ${dur(down)} down` : " · no downtime"}`;
+}
+
+/** The status page's row: name · uptime over the bars shown · status, then one bar per day. */
+function DailyRow({ r, days, first }: { r: Row; days: number; first: boolean }) {
+  const all = r.daily ?? [];
+  const shown = all.slice(-days);
+  const known = shown.filter((d) => d.uptime != null) as { day: string; uptime: number }[];
+  const avg = known.length ? known.reduce((n, d) => n + d.uptime, 0) / known.length : null;
+  const lvl = STATUS_LEVEL[r.status] ?? "warn";
+  return (
+    <div style={{ padding: "16px 0", borderTop: first ? "none" : `1px solid ${T.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{r.name}</span>
+          <span style={{ fontSize: 12, color: T.green }}>{r.site}</span>
+          <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: avg == null ? T.cyan : LEVEL_COLOR[uptimeLevel(avg)] }}>
+            {avg == null ? "no daily data" : `${avg.toFixed(3)}%`}
+          </span>
+        </div>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600, color: LEVEL_COLOR[lvl] }}>
+          <span style={{ width: 9, height: 9, borderRadius: 9, background: LEVEL_COLOR[lvl], boxShadow: `0 0 0 4px ${ownerRgba(LEVEL_COLOR[lvl], 0.18)}` }} />
+          {r.status === "up" ? "Operational" : STATUS_LABEL[r.status] ?? r.status}
+        </span>
+      </div>
+      {shown.length ? (
+        <div role="img" aria-label={`${r.name}: daily uptime, last ${shown.length} days`} style={{ display: "flex", gap: 3, marginTop: 10, height: 30 }}>
+          {shown.map((d) => (
+            <span key={d.day} title={dayTip(d)} style={{ flex: "1 1 0", minWidth: 2, borderRadius: 3, background: dayColor(d.uptime) }} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, fontSize: 12, color: T.cyan }}>No daily numbers from UptimeRobot for this monitor yet.</div>
+      )}
+    </div>
+  );
+}
+
 const SITE_TABS = [
   { key: "all", label: "All" },
   { key: "cbedge", label: "CB Edge" },
   { key: "vela", label: "Vela" },
+  { key: "voltick", label: "Voltick" },
 ] as const;
 type SiteTab = (typeof SITE_TABS)[number]["key"];
 
@@ -222,7 +279,7 @@ export default function Uptime() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
             {unconfigured.map((s) => (
               <span key={s.key} style={{ color: T.text }}>
-                <b style={{ color: T.gold }}>{s.label}</b> — no key. Add <code style={{ ...mono, color: T.cyan }}>UPTIMEROBOT_API_KEY=…</code> to <code style={mono}>.env.local</code> on the VPS (your UptimeRobot account key; monitors are split by URL — "vela" → Vela, "cbedge" → CB Edge) and restart the dashboard.
+                <b style={{ color: T.gold }}>{s.label}</b> — no key. Add <code style={{ ...mono, color: T.cyan }}>UPTIMEROBOT_API_KEY=…</code> to <code style={mono}>.env.local</code> on the VPS (your UptimeRobot account key; monitors are split by URL — "vela" → Vela, "cbedge" → CB Edge, "voltick" → Voltick) and restart the dashboard.
               </span>
             ))}
             {failing.map((s) => (
@@ -265,6 +322,27 @@ export default function Uptime() {
               level={nextCertDays == null ? undefined : nextCertDays < 7 ? "down" : nextCertDays < CERT_WARN_DAYS ? "warn" : "ok"}
             />
           </div>
+
+          {/* ── daily bars, the status page's view ── */}
+          <Card variant="classic" padding={cardPad} title="Daily" subtitle={`Uptime per New York day, the last ${isMobile ? 30 : 90} days · today on the right · hover a bar for the day`}>
+            {rows.length === 0 ? (
+              <div style={{ color: T.green, fontSize: 14, padding: "18px 0", textAlign: "center" }}>No monitors in this view.</div>
+            ) : (
+              <div>
+                {rows.map((r, i) => <DailyRow key={`${r.site}:${r.id}`} r={r} days={isMobile ? 30 : 90} first={i === 0} />)}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 4, fontSize: 12, color: T.cyan }}>
+                  <span>{isMobile ? 30 : 90} days ago</span>
+                  <span style={{ display: "inline-flex", gap: 12, flexWrap: "wrap" }}>
+                    <span><span style={{ color: T.green }}>■</span> 99.9%+</span>
+                    <span><span style={{ color: T.gold }}>■</span> 99–99.9%</span>
+                    <span><span style={{ color: T.red }}>■</span> under 99%</span>
+                    <span><span style={{ color: ownerRgba("#FFFFFF", 0.3) }}>■</span> no data</span>
+                  </span>
+                  <span>Today</span>
+                </div>
+              </div>
+            )}
+          </Card>
 
           {/* ── monitors ── */}
           <Card variant="classic" padding={cardPad} title="Monitors" subtitle="Response time over UptimeRobot's recent checks · uptime over 1, 7 and 30 days">

@@ -18,11 +18,11 @@
  *
  *   UPTIMEROBOT_API_KEY      ONE account key for everything (Brandon's setup).
  *                            Monitors are split by URL/name: "vela" → Vela,
- *                            "cbedge" → CB Edge. Anything else on the account
- *                            (the voltick.io monitor) is ignored — Voltick
- *                            has its own Uptime tab.
+ *                            "cbedge" → CB Edge, "voltick" → Voltick (added
+ *                            2026-10-10). Anything else on the account is ignored.
  *   UPTIMEROBOT_KEY_CBEDGE   optional: extra key(s) that are CB Edge only
  *   UPTIMEROBOT_KEY_VELA     optional: extra key(s) that are Vela only
+ *   UPTIMEROBOT_KEY_VOLTICK  optional: extra key(s) that are Voltick only
  *
  * Each may be an account Read-Only key (ur…), a Main key, or one or more
  * monitor-specific keys (m…), comma-separated. A Read-Only key is the right
@@ -35,6 +35,16 @@
  * Talks to UptimeRobot API v2 (POST /v2/getMonitors). v2 is "legacy" but
  * supported and is the one that takes Read-Only keys plus logs, response times,
  * 30-day ratios and SSL expiry in a single call.
+ *
+ * DAILY BARS (Brandon, 2026-10-10: the status page's row of day bars, "for
+ * daily"). The same call asks for `custom_uptime_ranges`, one range per New York
+ * day for the last DAILY_DAYS days (today runs to now), and each monitor comes
+ * back with `daily: [{ day, uptime }]`. A day before the monitor existed is
+ * `uptime: null` (a grey bar), not 100%. If UptimeRobot refuses the ranges the
+ * call is made again without them, so the rest of the page never depends on it.
+ *
+ * VOLTICK (2026-10-10): voltick.io monitors are shown too, as their own site,
+ * because Brandon's status page shows all five together.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -43,11 +53,14 @@ const HOLD_MS = 60_000;
 const TIMEOUT_MS = 10_000;
 const LOGS_LIMIT = 20;            // per monitor — the newest 20 events
 const RT_LIMIT = 96;              // recent checks for p50/p95 + the sparkline (8 h at 5-min checks)
+const DAILY_DAYS = 90;            // day bars, oldest first, today last
 
 const SITES = [
-  // Order matters for the shared key: vela.cbedge.net contains "cbedge" too.
+  // Order matters for the shared key: vela.cbedge.net contains "cbedge" too, and
+  // so does voltick.cbedge.net (the sandbox), which belongs with CB Edge's box.
   { key: 'vela', label: 'Vela', env: 'UPTIMEROBOT_KEY_VELA', match: /vela/i },
   { key: 'cbedge', label: 'CB Edge', env: 'UPTIMEROBOT_KEY_CBEDGE', match: /cbedge/i },
+  { key: 'voltick', label: 'Voltick', env: 'UPTIMEROBOT_KEY_VOLTICK', match: /voltick/i },
 ];
 
 // UptimeRobot monitor.status
@@ -74,7 +87,41 @@ function keysFor(site) {
     .filter(Boolean);
 }
 
-async function getMonitors(apiKey) {
+// ── New York days, as unix-second ranges ──
+const ET_PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', hourCycle: 'h23',
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+const ET_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
+/** ET wall clock minus UTC, in minutes, at instant `ms`. */
+function etOffsetMin(ms) {
+  const p = {};
+  for (const x of ET_PARTS.formatToParts(new Date(ms))) if (x.type !== 'literal') p[x.type] = Number(x.value);
+  return Math.round((Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute) - Math.floor(ms / 60000) * 60000) / 60000);
+}
+/** Epoch ms of 00:00 ET on a YYYY-MM-DD. Two passes so a DST day lands right. */
+function etMidnight(day) {
+  const [y, m, d] = day.split('-').map(Number);
+  const guess = Date.UTC(y, m - 1, d);
+  const first = guess - etOffsetMin(guess) * 60000;
+  return guess - etOffsetMin(first) * 60000;
+}
+/** The last `n` ET days, oldest first: [{ day, from, to }] in unix SECONDS; today ends now. */
+function dayRanges(n, now = Date.now()) {
+  const out = [];
+  const today = ET_DATE.format(new Date(now));
+  let cur = today;
+  for (let i = 0; i < n; i++) {
+    const from = etMidnight(cur);
+    const next = ET_DATE.format(new Date(from + 36 * 3600_000)); // tomorrow, DST-safe
+    const to = cur === today ? now : etMidnight(next);
+    out.push({ day: cur, from: Math.floor(from / 1000), to: Math.floor(to / 1000) - (cur === today ? 0 : 1) });
+    cur = ET_DATE.format(new Date(from - 12 * 3600_000)); // yesterday
+  }
+  return out.reverse();
+}
+
+async function getMonitors(apiKey, ranges = null) {
   const body = new URLSearchParams({
     api_key: apiKey,
     format: 'json',
@@ -85,6 +132,7 @@ async function getMonitors(apiKey) {
     custom_uptime_ratios: '1-7-30',
     ssl: '1',
   });
+  if (ranges?.length) body.set('custom_uptime_ranges', ranges.map((r) => `${r.from}_${r.to}`).join('-'));
   const r = await fetch(API, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', 'cache-control': 'no-cache' },
@@ -98,6 +146,33 @@ async function getMonitors(apiKey) {
     throw new Error(String(j?.error?.message || j?.error?.type || 'UptimeRobot refused the request').slice(0, 160));
   }
   return Array.isArray(j.monitors) ? j.monitors : [];
+}
+
+/** With the day ranges; if UptimeRobot refuses them, once more without (no bars, nothing else lost). */
+async function getMonitorsDaily(apiKey) {
+  const ranges = dayRanges(DAILY_DAYS);
+  try {
+    const ms = await getMonitors(apiKey, ranges);
+    for (const m of ms) m._ranges = ranges;
+    return ms;
+  } catch (e) {
+    console.warn('[uptime] day ranges refused, reading without them:', String(e?.message || e).slice(0, 120));
+    return getMonitors(apiKey);
+  }
+}
+
+/** `custom_uptime_ranges` ("100.000-99.912-…", same order as asked) → one entry per day. */
+function shapeDaily(m) {
+  const ranges = Array.isArray(m._ranges) ? m._ranges : null;
+  if (!ranges || m.custom_uptime_ranges == null) return null;
+  const vals = String(m.custom_uptime_ranges).split('-').map(num);
+  if (vals.length !== ranges.length) return null;
+  const created = num(m.create_datetime); // unix seconds; 0 / missing on some accounts
+  return ranges.map((r, i) => ({
+    day: r.day,
+    // a day that ended before the monitor existed has no data, not 100%
+    uptime: created && created > r.to ? null : vals[i],
+  }));
 }
 
 function shapeMonitor(m) {
@@ -137,6 +212,8 @@ function shapeMonitor(m) {
     responseTimes: rts.map((x) => ({ at: x.t * 1000, ms: x.ms })),
     ssl: sslExp ? { expiresAt: sslExp * 1000, brand: m.ssl?.brand ? String(m.ssl.brand).slice(0, 60) : null } : null,
     logs,
+    createdAt: num(m.create_datetime) ? num(m.create_datetime) * 1000 : null,
+    daily: shapeDaily(m),
   };
 }
 
@@ -150,7 +227,7 @@ function siteFor(m) {
 }
 
 async function pull(keys, errors, label) {
-  const results = await Promise.allSettled(keys.map(getMonitors));
+  const results = await Promise.allSettled(keys.map(getMonitorsDaily));
   const out = [];
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
@@ -204,7 +281,7 @@ async function build() {
     if (s === OTHER) continue;   // only a holder for shared-key errors; never shown
     sites.push(b);
   }
-  const ORDER = ['cbedge', 'vela'];   // display order, not match order
+  const ORDER = ['cbedge', 'vela', 'voltick'];   // display order, not match order
   sites.sort((x, y) => ORDER.indexOf(x.key) - ORDER.indexOf(y.key));
   return { asOf: new Date().toISOString(), heldAt: Date.now(), holdMs: HOLD_MS, sites };
 }
@@ -231,4 +308,4 @@ function registerUptimeRoutes({ register, send, NO_STORE }) {
   return 1;
 }
 
-module.exports = { registerUptimeRoutes, uptime, SITES, _shapeMonitor: shapeMonitor, _siteFor: siteFor };
+module.exports = { registerUptimeRoutes, uptime, SITES, _shapeMonitor: shapeMonitor, _siteFor: siteFor, _dayRanges: dayRanges };
