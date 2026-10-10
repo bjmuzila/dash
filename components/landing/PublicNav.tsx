@@ -32,6 +32,9 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 // the correct outcome: the tab it would underline is not there.
 export const PUBLIC_NAV = [
   { label: "Overview", href: "/" },
+  // Free, no account, open while sales are closed (Brandon, 2026-10-10: "since
+  // that's free"). Lives at /explore/seasonality and is already in sitemap.ts.
+  { label: "Seasonality", href: "/explore/seasonality" },
   ...(SALES_CLOSED ? [] : [{ label: "Pricing", href: "/pricing?from=nav" }]),
 ];
 

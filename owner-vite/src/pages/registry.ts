@@ -41,6 +41,8 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Reta: lazy(() => import("./Reta")),
   Todo: lazy(() => import("./Todo")),
   VoltickAudit: lazy(() => import("./VoltickAudit")),
+  // Page visits and sign-ins on voltick.cbedge.net: GET /api/voltick/visits (server-v2/voltick-visits.cjs).
+  VoltickUsage: lazy(() => import("./VoltickUsage")),
   // Who is on Vela and what they use there (server-v2/vela-telemetry.cjs).
   VelaUsage: lazy(() => import("./VelaUsage")),
   // The box behind Vela, one screen: GET /api/healthz (server-v2/healthz.cjs).

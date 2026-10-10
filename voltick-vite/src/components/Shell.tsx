@@ -31,6 +31,7 @@ import {
   rgba,
 } from "../theme";
 import { VOLTICK_SECTIONS, findGroup, findRoute } from "../lib/nav";
+import { recordVisit } from "../lib/visit";
 
 const RAIL_W = 244;
 
@@ -52,6 +53,11 @@ export default function Shell() {
   useEffect(() => {
     const g = findGroup(pathname);
     if (g) setOpen((prev) => (prev[g.title] ? prev : { ...prev, [g.title]: true }));
+  }, [pathname]);
+
+  // One visit per page opened, for owner.cbedge.net → Voltick Usage.
+  useEffect(() => {
+    recordVisit(pathname, pathname === "/" ? "Home" : findRoute(pathname)?.label ?? null);
   }, [pathname]);
 
   return (

@@ -14,9 +14,11 @@
 //   3. Tell an existing member — who is the person most likely to arrive here
 //      worried — that nothing has been taken away and their term is intact.
 //   4. Get them to sign in.
-// Nothing else. No live data, no free tools, no pricing, no feature marketing:
-// all of that sold a thing that is no longer for sale, and leaving it up reads
-// as a site that has not noticed it closed.
+//   5. Point at the one free thing that stays: the Seasonality almanac
+//      (/explore/seasonality), free with no account (Brandon, 2026-10-10).
+// Nothing else. No live data, no pricing, no feature marketing: all of that
+// sold a thing that is no longer for sale, and leaving it up reads as a site
+// that has not noticed it closed.
 //
 // STYLE: v3, same as LandingClient — the `shell` + stacked `card` plates, the
 // four-cell strip, PublicNav at the top, the dotted legal footer. Colours come
@@ -205,7 +207,27 @@ export default function MergerClient() {
           </div>
         </section>
 
-        {/* ═══ 3 · SIGN IN ════════════════════════════════════════════════ */}
+        {/* ═══ 3 · FREE: THE SEASONALITY ALMANAC ══════════════════════════ */}
+        <section style={card}>
+          <div style={{ ...pad, ...signInRow }}>
+            <div style={{ maxWidth: "62ch" }}>
+              <span style={v3Chip(V3.up)}>Free · no account</span>
+              <div style={signInH}>The Seasonality almanac stays open</div>
+              <p style={signInP}>
+                Decades of S&amp;P 500 calendar behaviour: how each month, week and
+                trading day has tended to go, and around the dates that move it.
+                Free for everyone, no sign-in.
+              </p>
+            </div>
+            <div style={ctaRow}>
+              <Link href="/explore/seasonality" style={v3GhostButton} className="merger-ghost">
+                Open the almanac →
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* ═══ 4 · SIGN IN ════════════════════════════════════════════════ */}
         <section id="sign-in" style={card}>
           <div style={{ ...pad, ...signInRow }}>
             <div>
@@ -228,6 +250,8 @@ export default function MergerClient() {
 
       <div style={legalFooter} className="merger-legal">
         <VoltickLink placement="landing-footer" style={legalLink}>Voltick</VoltickLink>
+        <span style={legalDot}>·</span>
+        <Link href="/explore/seasonality" style={legalLink}>Seasonality</Link>
         <span style={legalDot}>·</span>
         <Link href="/docs" style={legalLink}>Docs</Link>
         <span style={legalDot}>·</span>

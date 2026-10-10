@@ -14407,6 +14407,16 @@ try {
 } catch (e) {
   console.warn('[api-router] vela alert lists route not loaded:', e.message);
 }
+// /api/voltick/visit (the sandbox's page beacon) + /api/voltick/visits (owner):
+// who opens which page on voltick.cbedge.net and how many sign-ins, read by
+// owner.cbedge.net → Voltick Usage. See server-v2/voltick-visits.cjs.
+try {
+  const { registerVoltickVisitRoutes } = require('./voltick-visits.cjs');
+  const n = registerVoltickVisitRoutes({ register, send, readJson, libDb, clientIp, clientGeo, visitAttribution });
+  if (n) console.log(`[api-router] voltick visit routes registered (${n})`);
+} catch (e) {
+  console.warn('[api-router] voltick visit routes not loaded:', e.message);
+}
 // /api/owner/uptime — CB Edge + Vela uptime from UptimeRobot (outside-in),
 // key UPTIMEROBOT_API_KEY in .env.local (split by URL). Owner page:
 // owner.cbedge.net → System → Uptime. See server-v2/uptime-robot.cjs.

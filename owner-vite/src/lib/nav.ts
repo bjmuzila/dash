@@ -92,6 +92,8 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: OWNER_LIGHT_BLUE,
     links: [
       { label: "Voltick Audit", href: "/owner/voltick-audit", glyph: "⚡︎", key: "VoltickAudit" },
+      // Who opens which page on voltick.cbedge.net, and how many sign-ins (server-v2/voltick-visits.cjs).
+      { label: "Voltick Usage", href: "/owner/voltick-usage", glyph: "◎", key: "VoltickUsage" },
       { label: "Vela Usage", href: "/owner/vela", glyph: "◧", key: "VelaUsage" },
       // /healthz for the box behind vela.cbedge.net — feed, socket, DB, recorders, caches.
       { label: "Vela Health", href: "/owner/vela-health", glyph: "⌁", key: "VelaHealth" },
