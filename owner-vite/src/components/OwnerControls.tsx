@@ -3,7 +3,6 @@ import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
   homePanelStyle,
-  homeSecondaryButtonStyle,
 } from "../lib/theme";
 
 /**
@@ -304,17 +303,6 @@ export function OwnerControls() {
     } finally { setCtlBusy(null); }
   }, [flashMsg]);
 
-  const doStrategyRun = useCallback(async () => {
-    setCtlBusy("strategy");
-    try {
-      const r = await fetch("/proxy/strategy-run", { method: "POST" });
-      const j = await r.json();
-      flashMsg("strategy", j?.ok ? "Daily strategy generated" : `Failed: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("strategy", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); }
-  }, [flashMsg]);
-
   const doClearChat = useCallback(async () => {
     if (!window.confirm("Erase ALL subscriber chat messages? This cannot be undone.")) return;
     setCtlBusy("clearChat");
@@ -340,9 +328,6 @@ export function OwnerControls() {
         {/* SPX index-feed health (frozen-spot detector) + quick link to the page */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 260px", minWidth: 260 }}><SpotFeedHealth /></div>
-          <a href="/greeks" style={{ ...homeSecondaryButtonStyle, padding: "8px 16px", borderRadius: 8, textDecoration: "none", fontSize: 14, whiteSpace: "nowrap" }}>
-            Open Greeks →
-          </a>
         </div>
         {/* theta-terminal container health (cpu/mem/pids) — live docker stats */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -433,14 +418,6 @@ export function OwnerControls() {
             style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
           >
             {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
-          </button>
-          <button
-            onClick={doStrategyRun}
-            disabled={ctlBusy === "strategy"}
-            title="Generate the Analytics Strategy Builder card's full daily AI plan now (instead of waiting for the hourly run)."
-            style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "strategy" ? 0.6 : 1, cursor: ctlBusy === "strategy" ? "wait" : "pointer" }}
-          >
-            {ctlBusy === "strategy" ? "Generating…" : "🎯 Strategy now"}
           </button>
           <button
             onClick={doClearChat}

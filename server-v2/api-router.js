@@ -14669,71 +14669,10 @@ if barstate.islast
       return String(v).slice(0, 10);
     };
 
-    // ── /api/atm-prem-diff ───────────────────────────────────────────────────
-    // Near-the-money premium TRADED (price × day volume × 100) for the front and
-    // back MONTHLY expiry, one bar per session, calls and puts kept separate.
-    // Backs the Test Lab "Prem Diff" tab. Written daily by
-    // server-v2/atm-prem-recorder.js (src='live') and, for history, by
-    // atm-prem-backfill.js (src='dxlink').
-    //
-    // Read-only and cheap: one indexed scan of atm_prem_diff. The band (±1/2/5%
-    // of spot) is a STORED dimension, not a computed one, so switching it in the
-    // UI is another row of the same scan rather than a recompute upstream.
-    register('/api/atm-prem-diff', {
-      auth: 'subscriber', methods: ['GET'],
-      async handler(req, res) {
-        try {
-          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-          const symbol = String(sp.get('symbol') || 'SPY').trim().toUpperCase().slice(0, 12);
-          const bandPct = Number(sp.get('band') ?? 5);
-          const days = Number(sp.get('days') ?? 260);
-          // Required lazily: the recorder pulls in `pg` and proxy-tastytrade, and
-          // a problem there must fail THIS endpoint, not the whole router import.
-          const { getSeries } = require('./atm-prem-recorder');
-          const data = await getSeries({ symbol, bandPct, days });
-          return send(res, 200, data, { 'Cache-Control': 'public, max-age=60' });
-        } catch (e) {
-          return send(res, 500, { error: e.message, rows: [] }, { 'Cache-Control': 'no-store' });
-        }
-      },
-    });
-
-    // ── /api/atm-prem-intraday ───────────────────────────────────────────────
-    // One session of MINUTE buckets for the Prem Diff panel's intraday mode:
-    // per-minute premium traded (the delta between consecutive chain snapshots,
-    // priced per strike) plus the recorder's running cumulative, front and back
-    // monthly. Written by server-v2/atm-prem-intraday-recorder.js.
-    //
-    // `candles` carries the underlying's own 1m bars for the price pane. They
-    // come from candle-history (its own throwaway dxLink connection, cached
-    // ~60s) rather than from the stored per-minute spot: one sample a minute
-    // gives open=high=low=close, which draws a row of dashes instead of candles.
-    // A candle failure degrades to spot-only, it does not fail the request.
-    register('/api/atm-prem-intraday', {
-      auth: 'subscriber', methods: ['GET'],
-      async handler(req, res) {
-        try {
-          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-          const symbol = String(sp.get('symbol') || 'SPY').trim().toUpperCase().slice(0, 12);
-          const bandPct = Number(sp.get('band') ?? 5);
-          const date = String(sp.get('date') || 'latest').slice(0, 10);
-          const { getIntraday } = require('./atm-prem-intraday-recorder');
-          const data = await getIntraday({ symbol, bandPct, date });
-
-          let candles = [];
-          if (data.rows?.length) {
-            try {
-              const { fetchIntradayCandles } = require('./candle-history');
-              const first = Date.parse(data.rows[0].minute);
-              candles = await fetchIntradayCandles(symbol, '1m', first - 5 * 60_000);
-            } catch { /* price pane falls back to the stored spot */ }
-          }
-          return send(res, 200, { ...data, candles }, { 'Cache-Control': 'public, max-age=20' });
-        } catch (e) {
-          return send(res, 500, { error: e.message, rows: [] }, { 'Cache-Control': 'no-store' });
-        }
-      },
-    });
+    // /api/atm-prem-diff + /api/atm-prem-intraday RETIRED 2026-10-10 (Brandon) with
+    // atm-prem-recorder.js / atm-prem-intraday-recorder.js (moved to
+    // Vanilla/retired-2026-10-10/). Only the v2 Test Lab Prem Diff tab read them.
+    // atm_prem_diff / atm_prem_intraday are left in place.
 
     // ── /api/ib-dataset ──────────────────────────────────────────────────────
     // The Stat Prompter's IB datasets (Test Lab → Stat Prompter), kept current.

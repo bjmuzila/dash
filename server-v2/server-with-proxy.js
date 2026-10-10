@@ -305,13 +305,7 @@ catch (e) { console.warn('[gex-watch] recorder not loaded:', e.message); }
 let startGexGrossRecorder = () => {};
 try { ({ startGexGrossRecorder } = require('./gex-gross-recorder')); }
 catch (e) { console.warn('[gex-gross] recorder not loaded:', e.message); }
-// Daily (16:05 ET) near-the-money PREMIUM TRADED snapshot: call and put notional
-// for the front and back monthly at ±1/2/5% of spot → atm_prem_diff. Backs the
-// Test Lab "Prem Diff" tab. Same defensive load as its neighbours above — a
-// broken chain-fetch dependency must degrade one panel, not kill boot.
-let startAtmPremRecorder = () => {};
-try { ({ startAtmPremRecorder } = require('./atm-prem-recorder')); }
-catch (e) { console.warn('[atm-prem] recorder not loaded:', e.message); }
+// atm-prem-recorder (+ atm-prem-intraday, which it started): RETIRED 2026-10-10 (Brandon) — file moved to Vanilla/retired-2026-10-10/; its table is left in place.
 // Backs the /mult-greek click card's 15m/30m/open NET GEX change. Optional —
 // load defensively so a missing/broken module can't crash the origin.
 let multGreekGexRecorder = null;
@@ -321,7 +315,7 @@ const { getEsSpxBasis, getEsSpxBasisReason } = require('./es-spx-basis');
 const { getNqNdxBasis, getNqNdxBasisReason } = require('./nq-ndx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
-const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
+// greek-scanner-recorder RETIRED 2026-10-10 (Brandon) — moved to Vanilla/retired-2026-10-10/.
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, runContractBackfill: runFarCbBackfill, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
@@ -4596,81 +4590,9 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
-      // ── Greek Sensitivity Scanner ─────────────────────────────────────────
-      // GET /proxy/greek-scanner?mode=charm|vanna|gamma|tg&window=15|30|60&limit=25
-      //   mode: charm = charm exposure shifts (delta decay)
-      //         vanna = vanna exposure shifts (delta↔IV sensitivity)
-      //         gamma = gamma momentum / acceleration
-      //         tg    = theta-gamma imbalance (|charm| × |gamma| composite)
-      if (pathname === '/proxy/greek-scanner' && req.method === 'GET') {
-        (async () => {
-          try {
-            if (!(await greekEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
-            const p = greekGetPool();
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const win   = [15, 30, 60].includes(Number(u.searchParams.get('window'))) ? Number(u.searchParams.get('window')) : 15;
-            const limit = Math.min(100, Number(u.searchParams.get('limit') || 25));
-            const mode  = ['charm','vanna','gamma','tg'].includes(u.searchParams.get('mode')) ? u.searchParams.get('mode') : 'charm';
-            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
-
-            // Pick the metric column for change-tracking.
-            const metricCol = mode === 'vanna' ? 'vanna_net'
-                            : mode === 'gamma' ? 'gamma_net'
-                            : 'charm_net';   // charm + tg both start with charm
-
-            const sql = `
-              WITH changes AS (
-                SELECT gs.symbol, gs.expiry, gs.strike, gs.ts, gs.spot,
-                       gs.charm_net, gs.vanna_net, gs.gamma_net, gs.delta_net,
-                       (gs.${metricCol} - b.${metricCol}) AS metric_chg
-                FROM greek_snapshots gs
-                JOIN LATERAL (
-                  SELECT ${metricCol} FROM greek_snapshots h
-                  WHERE h.date = gs.date AND h.symbol = gs.symbol AND h.strike = gs.strike
-                    AND h.ts <= gs.ts - INTERVAL '${win} minutes'
-                  ORDER BY h.ts DESC LIMIT 1
-                ) b ON TRUE
-                WHERE gs.date = $1
-              ),
-              stats AS (
-                SELECT symbol, expiry, strike,
-                       AVG(metric_chg) AS mean_chg, STDDEV_POP(metric_chg) AS sd_chg,
-                       COUNT(*) AS n,
-                       (ARRAY_AGG(metric_chg  ORDER BY ts DESC))[1] AS latest_chg,
-                       (ARRAY_AGG(charm_net   ORDER BY ts DESC))[1] AS charm_now,
-                       (ARRAY_AGG(vanna_net   ORDER BY ts DESC))[1] AS vanna_now,
-                       (ARRAY_AGG(gamma_net   ORDER BY ts DESC))[1] AS gamma_now,
-                       (ARRAY_AGG(delta_net   ORDER BY ts DESC))[1] AS delta_now,
-                       (ARRAY_AGG(spot        ORDER BY ts DESC))[1] AS spot_now
-                FROM changes
-                GROUP BY symbol, expiry, strike
-              ),
-              scored AS (
-                SELECT *,
-                  CASE WHEN sd_chg > 0 THEN (latest_chg - mean_chg) / sd_chg ELSE NULL END AS z_score,
-                  ABS(charm_now) * ABS(gamma_now) / GREATEST(ABS(delta_now), 1e6) AS tg_score
-                FROM stats
-                WHERE n >= 2 AND latest_chg IS NOT NULL
-              )
-              SELECT symbol, expiry, strike, latest_chg, mean_chg, sd_chg, n, z_score,
-                     charm_now, vanna_now, gamma_now, delta_now, spot_now, tg_score
-              FROM scored
-              ORDER BY ${mode === 'tg' ? 'tg_score' : 'ABS(latest_chg)'} DESC NULLS LAST
-              LIMIT $2`;
-
-            const { rows } = await p.query(sql, [today, limit]);
-            sendJson(res, 200, { ok: true, window: win, mode, rows });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Manual snapshot fire: POST /proxy/greek-scanner-run
-      if (pathname === '/proxy/greek-scanner-run' && req.method === 'POST') {
-        runGreekSnapshot(`http://localhost:${PORT}`, { force: true })
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
+      // /proxy/greek-scanner + /proxy/greek-scanner-run RETIRED 2026-10-10 with the
+      // greek scanner recorder (only the v2 Scanner read them). greek_snapshots is
+      // left in place and ages out through retention-cleanup.
 
       // ── Multi-ticker GEX Scanner ──────────────────────────────────────────
       // GET /proxy/scanner?sort=gex|flip&limit=50&any=1
@@ -5509,15 +5431,7 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
-      // Generate the daily AI strategy now (ignores the 08:20 schedule).
-      // POST /proxy/strategy-run
-      if (pathname === '/proxy/strategy-run' && req.method === 'POST') {
-        const { generate } = require('./strategy-generator');
-        generate(`http://localhost:${PORT}`)
-          .then(() => sendJson(res, 200, { ok: true }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
+      // POST /proxy/strategy-run RETIRED 2026-10-10 with strategy-generator.js.
       // Toggle the MVC auto-collector on/off at runtime, or read its state.
       //   GET  /proxy/mvc-auto            → { enabled }
       //   POST /proxy/mvc-auto { on: bool } → { enabled }
@@ -6163,14 +6077,7 @@ async function main() {
     // the watch recorder for the same reason the watch fires after the ladder —
     // it reads what the earlier pass wrote.
     if (runJob('gex-gross')) startGexGrossRecorder();
-    // Daily near-the-money PREMIUM TRADED snapshot (16:05 ET, weekdays) →
-    // atm_prem_diff. Fires after the close because it reads the chain's DAY
-    // VOLUME, which is only final once the 16:00 print is in. One row per
-    // (symbol, front/back monthly, band); the Prem Diff panel plots put premium
-    // minus call premium from it. This is the ONLY thing that grows the series
-    // forward — atm-prem-backfill.js can rebuild the past from dxLink candles,
-    // but today's tape has to be captured today.
-    if (runJob('atm-prem')) startAtmPremRecorder();
+    // atm-prem / atm-prem-intraday: RETIRED 2026-10-10 (Brandon) — file moved to Vanilla/retired-2026-10-10/; its table is left in place.
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     if (runJob('gex-levels-history')) require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
@@ -6195,10 +6102,9 @@ async function main() {
     // Earnings calendar: Sat 09:00 ET scrape of next Mon–Fri from Nasdaq,
     // mcap ≥ $100B → earnings_calendar (feeds /economic-calendar bottom strip).
     if (runJob('earnings-calendar')) require('./earnings-calendar-recorder').startEarningsCalendarRecorder();
-    // Day-post writer: auto-generates the premarket/midday/EOD X posts
-    // (Anthropic via /api/social-media/day-post) into day_posts at their slot
-    // times, so the Social Media → Day Posts tab has a ready copy/paste list.
-    if (runJob('day-post')) require('./day-post-writer').startDayPostWriter(PORT);
+    // day-post-writer (scheduled X posts → day_posts): RETIRED 2026-10-10 (Brandon) — file moved to Vanilla/retired-2026-10-10/; its table is left in place.
+    // Nothing read day_posts. On-demand /api/social-media/day-post (owner Social
+    // Media page) is a separate route and still works.
     // Per-strike GEX growth recorder: sweeps the watchlist during RTH and stores
     // delta-vs-open per strike (feeds /strike-growth tracker + DoD Movers tabs).
     // Reads the LIVE dxLink feed (not Theta/REST) — pass the shared proxy so
@@ -6207,9 +6113,7 @@ async function main() {
     // Saves each finished session's Align board (all wall modes) to align_daily,
     // so /v3/scanner?tab=align can reopen any past day. See _alArchiveTick.
     if (runJob('align-archiver')) startAlignArchiver();
-    // Per-strike Greek snapshots: records gamma/delta/vanna/charm per strike
-    // every 5m for the Greek Sensitivity Scanner (/scanner Greeks tab).
-    if (runJob('greek-scanner')) startGreekScannerRecorder(PORT);
+    // greek-scanner: RETIRED 2026-10-10 (Brandon) — file moved to Vanilla/retired-2026-10-10/; its table is left in place.
     // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
     // strike (within 30d expirations) sits unusually far OTM vs spot.
     // OFF since 2026-10-09: its only reader was the v3 Scanner's Watch This tab,
@@ -6426,10 +6330,8 @@ async function main() {
     // overnight tape + SPX gap/fair-value into a 5-bullet read → premarket_summary.
     if (runJob('premarket-summary')) require('./premarket-summary-generator').startPremarketSummaryGenerator(PORT);
 
-    // Analytics strategy-builder card: at ~08:20 ET (weekdays) Claude turns the
-    // morning positioning/levels/calendar snapshot into a full daily SPX/ES
-    // strategy → daily_strategy.
-    if (runJob('strategy')) require('./strategy-generator').startStrategyGenerator(PORT);
+    // strategy-generator (hourly AI daily strategy → daily_strategy): RETIRED 2026-10-10 (Brandon) — file moved to Vanilla/retired-2026-10-10/; its table is left in place.
+    // No live page read it (the v3 StrategyBuilder card was never mounted).
     console.log(`[SERVER-V2] ROLE=${ROLE} started ${startedJobs.length} job(s): ${startedJobs.join(', ') || 'none'}`);
     if (ROLE === 'jobs') startJobsHeartbeat();
     }).catch((e) => console.error('[SERVER-V2] background job start failed:', e?.stack || e));

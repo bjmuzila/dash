@@ -75,7 +75,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Results", href: "/owner/dev/results", glyph: "▤", key: "Results" },
       { label: "Backtests", href: "/owner/backtests", glyph: "∿", key: "Backtests" },
       { label: "Probe", href: "/owner/probe", glyph: "🔍", key: "Probe" },
-      { label: "Greeks", href: "/greeks", glyph: "∇", key: "Greeks" },
+      // Greeks RETIRED 2026-10-10 (Brandon) — page moved to Vanilla/retired-2026-10-10/.
       { label: "ΔGEX Board", href: "/owner/gex-growth", glyph: "Δ", key: "GexGrowth" },
       { label: "Daily Grades", href: "/owner/daily-grades", glyph: "◆", key: "DailyGrades" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄", key: "EstimatedMove" },
@@ -156,6 +156,8 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
 export const OWNER_REDIRECTS: { from: string; to: string }[] = [
   // Overview → its traffic half is Customers; the system half is on Admin.
   { from: "/owner/dev/owner", to: "/owner/customers" },
+  // Greeks page retired 2026-10-10 → the hub.
+  { from: "/greeks", to: "/owner" },
 ];
 
 /**
