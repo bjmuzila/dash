@@ -11,8 +11,8 @@
 //   cards     breadth · average change · leader / laggard · volume vs usual ·
 //             SPX gamma (net GEX, walls, flip) · whale flow today, this list
 //   Price     a row per symbol, grouped: last, change, change %, volume,
-//             relative volume, day range, 5-day line, 30-day range, net GEX,
-//             put / call wall, whale flow — 1D / 5D / 1M change; click a column
+//             relative volume, day range, 5-day line, distance to the nearest
+//             wall (was the 30-day range), net GEX, put / call wall, whale flow — 1D / 5D / 1M change; click a column
 //             to sort inside each group; ⋯ on a row: open, section, remove
 //   Financials  earnings: next report (date, before / after the open, EPS
 //             estimate, market cap) and the last reports' moves
@@ -80,7 +80,7 @@ const TICK_MS = 15_000
 type Tab = 'price' | 'fin' | 'news'
 type Period = '1D' | '5D' | '1M'
 type GroupMode = 'type' | 'sections' | 'none'
-type ColId = 'vol' | 'rvol' | 'day' | 'spark' | 'r30' | 'gex' | 'walls' | 'whale'
+type ColId = 'vol' | 'rvol' | 'day' | 'spark' | 'dist' | 'gex' | 'walls' | 'whale'
 type SortKey = 'symbol' | 'last' | 'chg' | 'pct' | ColId
 
 interface Prefs {
@@ -96,7 +96,7 @@ const DEFAULT_PREFS: Prefs = {
   tab: 'price',
   period: '1D',
   group: 'type',
-  cols: { vol: true, rvol: true, day: true, spark: true, r30: true, gex: true, walls: true, whale: true },
+  cols: { vol: true, rvol: true, day: true, spark: true, dist: true, gex: true, walls: true, whale: true },
   sort: null,
   collapsed: [],
   selected: null,
@@ -377,7 +377,8 @@ class AdvancedView {
     const syms = activeList().symbols
     void refreshQuotes(syms)
     void loadStats(syms)
-    void loadGex(syms.includes('SPX') ? syms : ['SPX', ...syms])
+    // lean: GEX only for the SPX card and the selected row, not every symbol
+    void loadGex(this.gexSyms())
     void loadWhales()
     void loadEarnings()
     void loadEcon()
@@ -473,10 +474,11 @@ class AdvancedView {
           return gexOf(sym)?.net ?? null
         case 'whale':
           return whalesOf(this.flowSym(sym))?.net ?? null
-        case 'day':
-        case 'r30': {
-          const lo = s.key === 'day' ? st?.low : st?.range30?.lo
-          const hi = s.key === 'day' ? st?.high : st?.range30?.hi
+        case 'dist':
+          return this.wallDist(sym)?.sort ?? null
+        case 'day': {
+          const lo = st?.low
+          const hi = st?.high
           const px = this.price(sym)
           return lo != null && hi != null && px != null && hi > lo ? (px - lo) / (hi - lo) : null
         }
@@ -586,7 +588,7 @@ class AdvancedView {
     if (c.rvol) out.push({ id: 'rvol', label: 'Rel vol', cls: 'num' })
     if (c.day) out.push({ id: 'day', label: 'Day range', cls: 'rng' })
     if (c.spark) out.push({ id: 'spark', label: '5 day', cls: 'spark' })
-    if (c.r30) out.push({ id: 'r30', label: '30-day range', cls: 'rng' })
+    if (c.dist) out.push({ id: 'dist', label: 'To wall', cls: 'num', cb: true })
     if (c.gex) out.push({ id: 'gex', label: 'Net GEX', cls: 'num', cb: true })
     // Voltick's word for the pair ("‖ WALLS 748/784"): put wall / call wall, in surge blue
     if (c.walls) out.push({ id: 'walls', label: 'Walls', cls: 'num', cb: true })
@@ -600,7 +602,7 @@ class AdvancedView {
     // sized to fit beside the right column at 1600px with every column on; narrower, the
     // table scrolls sideways under a symbol column that stays put
     const W: Record<string, number> = { num: 64, rng: 104, spark: 72 }
-    const widths = cols.map((c) => (c.id === 'walls' ? 92 : c.id === 'last' ? 80 : W[c.cls]!))
+    const widths = cols.map((c) => (c.id === 'walls' || c.id === 'dist' ? 92 : c.id === 'last' ? 80 : W[c.cls]!))
     const tpl = `minmax(130px, 1fr) ${widths.map((w) => `${w}px`).join(' ')} 26px`
     // the table is as wide as its columns need, and no wider than the view when they fit
     const minWidth = 130 + widths.reduce((t, w) => t + w, 0) + 26 + (widths.length + 1) * 10 + 32
@@ -725,10 +727,22 @@ class AdvancedView {
         case 'spark':
           cell.append(sparkline(doc, st?.spark ?? [], 80, 26))
           break
-        case 'r30':
-          if (st?.range30) cell.append(rangeBar(doc, st.range30.lo, st.range30.hi, px))
-          else cell.textContent = '·'
+        case 'dist': {
+          if (via) {
+            cell.textContent = `↳ ${via}`
+            cell.classList.add('muted')
+            break
+          }
+          const d = this.wallDist(sym)
+          if (d) {
+            cell.append(el(doc, 'span', d.side, d.text))
+            cell.title = d.title
+          } else {
+            cell.textContent = '·'
+            if (gexOf(sym) === undefined && gexTicker(sym)) cell.title = 'Select the row to load its walls'
+          }
           break
+        }
         case 'gex': {
           if (via) {
             cell.textContent = `↳ ${via}`
@@ -736,7 +750,11 @@ class AdvancedView {
             break
           }
           const g = gexOf(sym)
-          cell.textContent = g ? fMoney(g.net) : g === null || !gexTicker(sym) ? '·' : '…'
+          // lean: GEX is read only for SPX and the selected row, so an unread row
+          // shows '·' (not a loading '…') and says how to get it
+          const loading = g === undefined && !!gexTicker(sym) && this.gexSyms().includes(sym)
+          cell.textContent = g ? fMoney(g.net) : loading ? '…' : '·'
+          if (g === undefined && gexTicker(sym) && !loading) cell.title = 'Select the row to load its GEX'
           cell.dataset.tone = tone(g?.net)
           cell.classList.add('strong')
           break
@@ -803,6 +821,40 @@ class AdvancedView {
   }
   private select(sym: string): void {
     this.setPrefs({ selected: sym })
+    void loadGex([this.gexSym(sym)])
+  }
+  /** The symbol GEX is read and kept under for a row: itself, or a future's index. */
+  private gexSym(sym: string): string {
+    return resolveSym(sym).kind === 'futures' ? this.flowSym(sym) : sym
+  }
+  /** The symbols whose GEX the view keeps fresh: SPX (the gamma card) and the selected row's. */
+  private gexSyms(): string[] {
+    const sel = this.selected()
+    return [...new Set(['SPX', ...(sel ? [this.gexSym(sel)] : [])])]
+  }
+  /**
+   * How far price is from its nearest GEX wall (replaced the 30-day range, 2026-10-10).
+   * Between the walls: points to the nearer one ("37.1 to CW"). Through a wall: how far
+   * past it ("+3.2 over CW"). sort: % to the nearer wall, negative once through one, so
+   * an ascending sort puts broken walls first, then the closest.
+   */
+  private wallDist(sym: string): { text: string; side: 'pw' | 'cw'; sort: number; title: string } | null {
+    if (resolveSym(sym).kind === 'futures') return null
+    const g = gexOf(sym)
+    const px = this.price(sym)
+    if (!g || px == null || px <= 0) return null
+    const pw = g.putWall
+    const cw = g.callWall
+    const fp = (v: number) => (Math.abs(v) >= 10 ? Math.abs(v).toFixed(1) : Math.abs(v).toFixed(2))
+    const pc = (v: number) => `${((Math.abs(v) / px) * 100).toFixed(2)}%`
+    if (cw != null && px > cw) return { text: `+${fp(px - cw)} over CW`, side: 'cw', sort: -((px - cw) / px) * 100, title: `${pc(px - cw)} above the call wall ${fLevel(cw)}` }
+    if (pw != null && px < pw) return { text: `−${fp(pw - px)} under PW`, side: 'pw', sort: -((pw - px) / px) * 100, title: `${pc(pw - px)} below the put wall ${fLevel(pw)}` }
+    const toC = cw != null ? cw - px : Infinity
+    const toP = pw != null ? px - pw : Infinity
+    if (!Number.isFinite(toC) && !Number.isFinite(toP)) return null
+    return toC <= toP
+      ? { text: `${fp(toC)} to CW`, side: 'cw', sort: (toC / px) * 100, title: `${pc(toC)} below the call wall ${fLevel(cw)}` }
+      : { text: `${fp(toP)} to PW`, side: 'pw', sort: (toP / px) * 100, title: `${pc(toP)} above the put wall ${fLevel(pw)}` }
   }
   private openOnChart(sym: string): void {
     this.ctx.setSymbol(`${PROVIDER_NAME}:${sym}`)
@@ -1175,7 +1227,7 @@ class AdvancedView {
       ['rvol', 'Relative volume'],
       ['day', 'Day range'],
       ['spark', '5-day line'],
-      ['r30', '30-day range'],
+      ['dist', 'Distance to nearest wall'],
       ['gex', 'Net GEX'],
       ['walls', 'Walls (put / call)'],
       ['whale', 'Whale flow today'],

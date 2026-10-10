@@ -55,6 +55,7 @@ import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { WALLS_TYPE } from './wallsIndicator'
 import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
 import { track } from './telemetry'
+import { HEAT_TYPE, PROFILE_TYPE } from './studies'
 
 /** The old ★ favourites: read once, into List 1. */
 const FAV_KEY = 'cb-v3-vela-ind-favs'
@@ -82,7 +83,13 @@ interface IndList {
  * while the journal was redone; Brandon put it back on 2026-10-08 ("can you put
  * the trade journal indicator back on vela").
  */
-const HIDDEN = new Set<string>([])
+const HIDDEN = new Set<string>([
+  // GEX Heatmap, retired 2026-10-10 (Brandon: "I don't want users using it").
+  // studyOrder.ts also strips it off any chart that still carries it.
+  HEAT_TYPE,
+  // GEX Profile, retired 2026-10-10 (Brandon: "gex profile indicator can go").
+  PROFILE_TYPE,
+])
 
 /** Ours: CB Walls, the Path and its Ribbon, and every pages/vela/studies/ type (`cbedge-…`). */
 const isVoltickType = (t: string) => t === WALLS_TYPE || t === PATH_TYPE || t === RIBBON_TYPE || t.startsWith('cbedge-')

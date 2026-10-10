@@ -146,9 +146,9 @@ import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 //
 // ── CB Edge studies + events ─────────────────────────────────────────────────
 // pages/vela/studies/ — native studies on the Indicators picker: Prior Levels,
-// Initial Balance, Overnight H/L, Expected Move, Key Levels, GEX Profile (net
-// GEX by strike beside the price axis), Net Premium and Vol/GEX Flow panes,
-// Whale Prints markers, Market Profile (TPO), GEX Rail and Heatmap. Opt-in, never
+// Initial Balance, Overnight H/L, Expected Move, Key Levels, Net Premium and
+// Vol/GEX Flow panes, Whale Prints markers, Market Profile (TPO) and GEX Rail
+// (GEX Profile and GEX Heatmap retired 2026-10-10 — studyOrder.ts). Opt-in, never
 // seeded, except Events (studies/events.ts; Brandon, 2026-10-04, mockup
 // generated/2026-10-04-vela-events-r2.html): the week's econ releases, the
 // Alerts feed's engine alerts for the chart's symbol and your scripts' alerts as

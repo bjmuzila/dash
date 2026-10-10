@@ -7,13 +7,18 @@
 // instance of it starts, so the Vela page itself carries only this file.
 //
 //   levels.ts  CB Prior Levels · CB Initial Balance · CB Overnight High / Low
-//   gex.ts     CB Expected Move · CB Key Levels · CB GEX Profile
+//   gex.ts     CB Expected Move · CB Key Levels (CB GEX Profile retired 2026-10-10,
+//              same treatment as the Heatmap below; profileImpl is unused)
 //   flow.ts    CB Net Premium · CB Vol / GEX Flow · CB Net GEX · CB Net GEX Flow ·
 //              CB Whale Prints
 //   cvd.ts     CB Cumulative Volume Delta (buy vs sell volume on the ticker itself)
 //   tpo.ts     CB Market Profile
 //   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, right or left of the chart)
-//   heat.ts    CB GEX Heatmap (the per-minute ladders, behind the candles)
+//   (retired)  CB GEX Heatmap — removed 2026-10-10 (Brandon: it slowed charts
+//              down and users should not have it). The type stays registered
+//              with an inert body only so an old saved layout opens cleanly;
+//              studyOrder.ts strips it off every chart and indicatorPicker.ts
+//              no longer offers it. heat.ts is no longer imported.
 //   journal.ts CB Journal Trades (your journal's fills on the chart). Back in
 //              the Indicators dialog since 2026-10-08 (hidden from 2026-10-04
 //              while the journal was redone).
@@ -25,7 +30,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { tokenHexAlpha } from '@/design/theme'
-import { defineStudy } from './common'
+import { defineStudy, studyImpl } from './common'
 
 // ── Option lists the settings dialogs offer (the impl modules parse the same strings) ──
 export const SESSION_BASIS = ['Regular hours', 'Full session'] as const
@@ -257,7 +262,8 @@ export function registerStudies(): void {
         { key: 'tags', title: 'Tag the biggest', type: 'int', defval: 3, min: 0, max: 10 },
       ],
     },
-    () => import('./gex').then((m) => m.profileImpl),
+    // RETIRED 2026-10-10 (Brandon: "gex profile indicator can go"): inert, like the Heatmap.
+    () => Promise.resolve(studyImpl({ settings: () => null, render: () => ({}) })),
   )
   defineStudy(
     {
@@ -498,7 +504,8 @@ export function registerStudies(): void {
         { key: 'cut', title: 'Hide cells under % of the biggest', type: 'int', defval: 8, min: 0, max: 50 },
       ],
     },
-    () => import('./heat').then((m) => m.heatImpl),
+    // RETIRED 2026-10-10: inert — loads nothing, draws nothing. See the header.
+    () => Promise.resolve(studyImpl({ settings: () => null, render: () => ({}) })),
   )
   defineStudy(
     {

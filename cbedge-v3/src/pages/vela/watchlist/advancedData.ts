@@ -9,15 +9,19 @@
 //             far against the average of the last 20 sessions at the same minute
 //             of the day), the 5-day line, the 30-day range, the closes 5 and ~21
 //             sessions back (the 5D / 1M change), and today's intraday line.
-//             Read at most every 2 minutes per symbol, 3 at a time.
+//             Read when the view opens, then at most every 15 minutes per symbol
+//             (STATS_MS), 3 at a time — none of it needs to be live.
 //   GEX       per symbol with an options chain: /api/chains front expiry through
 //             board/chainGex (the Key Levels study's own read): net GEX (OI +
 //             volume, summed over strikes), call wall, put wall, gamma flip.
 //             ES / NQ have no chain of their own (they point at SPX / NDX).
-//             Every 5 minutes, 2 at a time, for the first 30 symbols.
+//             LEAN (2026-10-10): only for the symbols the caller asks for — the
+//             Advanced view asks for SPX (its gamma card) and the selected row,
+//             not the whole list. Every 5 minutes (GEX_MS), 2 at a time.
 //   WHALES    today's ≥ $1M prints for every ticker in one read
 //             (/api/lse/whales, no ticker filter): net premium (bullish −
-//             bearish) and the prints themselves, per underlying. Every minute.
+//             bearish) and the prints themselves, per underlying. Every 5
+//             minutes (WHALES_MS).
 //   EARNINGS  /proxy/earnings-week (this week and next: date, before / after the
 //             open, EPS estimate, market cap) and /api/public-earnings (the
 //             earnings study: what the stock did on each of its last reports, for
@@ -204,9 +208,14 @@ export function statsFromBars(bars: readonly OHLCV[]): SymStats | null {
   }
 }
 
+/** How often each kind of read may repeat while the Advanced view is open. */
+const STATS_MS = 15 * 60_000
+const GEX_MS = 5 * 60_000
+const WHALES_MS = 5 * 60_000
+
 export async function loadStats(syms: readonly string[]): Promise<void> {
   const now = Date.now()
-  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > 120_000).slice(0, 80)
+  const due = syms.filter((s) => now - (statsAt.get(s) ?? 0) > STATS_MS).slice(0, 80)
   for (const s of due) statsAt.set(s, now)
   await pool(due, 3, async (s) => {
     try {
@@ -232,7 +241,7 @@ export const gexOf = (sym: string): GexSummary | null | undefined => gex.get(sym
 
 export async function loadGex(syms: readonly string[]): Promise<void> {
   const now = Date.now()
-  const due = syms.filter((s) => gexTicker(s) && now - (gexAt.get(s) ?? 0) > 300_000).slice(0, 30)
+  const due = syms.filter((s) => gexTicker(s) && now - (gexAt.get(s) ?? 0) > GEX_MS).slice(0, 30)
   for (const s of due) gexAt.set(s, now)
   await pool(due, 2, async (s) => {
     try {
@@ -263,7 +272,7 @@ export const whalesOf = (sym: string): WhaleAgg | undefined => whales.get(sym)
 export const whalesDayKey = (): string => whalesDay
 
 export async function loadWhales(): Promise<void> {
-  if (Date.now() - whalesAt < 60_000) return
+  if (Date.now() - whalesAt < WHALES_MS) return
   whalesAt = Date.now()
   const day = etDateKey(Date.now())
   try {

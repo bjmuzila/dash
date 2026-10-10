@@ -1105,3 +1105,21 @@ span.cb-wla-hc,
     padding: 10px 12px;
 }
 }
+
+/* idle pause (advanced.ts IDLE_MS): a quiet pill over the view while reads are stopped */
+.cb-wla .cb-wla-idle {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 7px 14px;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  background: var(--color-raised);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  box-shadow: var(--vt-card-shadow);
+  pointer-events: none;
+}
