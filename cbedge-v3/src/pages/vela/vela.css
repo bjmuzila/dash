@@ -2975,6 +2975,145 @@
   width: 100%;
 }
 
+/* ── Level Alerts → Lists (levels/levelLists.ts): one level, many tickers,
+   watched by the server. Same tokens as the panel above. ── */
+.cb-ll {
+  display: flex;
+  flex-direction: column;
+}
+.cb-ll-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.cb-ll-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-vt-elev);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.cb-ll-chip:hover {
+  border-color: var(--color-vt-rail);
+}
+.cb-ll-chip[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  background: linear-gradient(var(--vt-accent-soft), var(--vt-accent-soft)), var(--color-vt-elev);
+  box-shadow: var(--vt-lit-glow);
+  color: var(--color-vt-accent-text);
+}
+.cb-ll-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-line);
+}
+.cb-ll-head b {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.cb-ll-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--color-faint);
+}
+.cb-ll-add,
+.cb-ll-hook {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cb-ll-in,
+.cb-ll-sel {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-vt-ink, var(--color-bg));
+  color: var(--color-fg);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.cb-ll-in:focus,
+.cb-ll-sel:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+.cb-ll-go {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-vt-paper);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.cb-ll-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cb-ll-mine {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+.cb-ll-mine[hidden],
+.cb-ll [hidden] {
+  display: none;
+}
+.cb-ll-note {
+  margin: 8px 0 2px;
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  color: var(--color-faint);
+}
+.cb-ll-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-weight: 600;
+}
+.cb-ll-row > span {
+  flex: none;
+}
+.cb-ll-sub {
+  margin-top: 10px;
+  font-size: var(--text-2xs);
+  color: var(--color-faint);
+}
+.cb-ll-pause {
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 10px;
+}
+.cb-ll-msg {
+  margin: 8px 0 0;
+  font-size: var(--text-2xs);
+  color: var(--color-vt-accent-text);
+}
+
 /* ── Strategy Tester → Optimise (script/optimiser.ts) ── */
 .cb-op-root {
   display: flex;

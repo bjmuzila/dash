@@ -5937,6 +5937,11 @@ async function main() {
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.
     if (runJob('watch')) require('./watch-recorder').startWatchRecorder(PORT);
+    // Vela alert lists: each account's level lists (★ Volt on NVDA, AMD, …), read
+    // every 60s whether or not a Vela tab is open; a cross rings the bell
+    // (vela_alerts) and the account's Discord webhook, then cools down.
+    if (runJob('vela-alert-lists')) try { require('./vela-alert-lists.cjs').startVelaAlertListWatcher(PORT); }
+    catch (e) { console.warn('[alert-lists] watcher not started:', e.message); }
     // CB contract trade tracker: every 60s from 09:44-16:10 ET it opens the due
     // checkpoint (9:45/10:30/12:00) by probing the CB-strike 0DTE contract on
     // TastyTrade — the same /proxy/probe-rest pipeline /owner/probe and

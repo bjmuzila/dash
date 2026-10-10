@@ -14398,6 +14398,15 @@ try {
 } catch (e) {
   console.warn('[api-router] vela alerts route not loaded:', e.message);
 }
+// /api/vela/alert-lists — per-account level lists (★ Volt on NVDA, AMD, …) that the
+// server watches every minute and rings on Vela's bell + Discord. See
+// server-v2/vela-alert-lists.cjs; the watcher is started in server-with-proxy.js.
+try {
+  const { registerVelaAlertListRoutes } = require('./vela-alert-lists.cjs');
+  if (registerVelaAlertListRoutes({ register, send, readJson, libDb })) console.log('[api-router] vela alert lists route registered');
+} catch (e) {
+  console.warn('[api-router] vela alert lists route not loaded:', e.message);
+}
 // /api/owner/uptime — CB Edge + Vela uptime from UptimeRobot (outside-in),
 // key UPTIMEROBOT_API_KEY in .env.local (split by URL). Owner page:
 // owner.cbedge.net → System → Uptime. See server-v2/uptime-robot.cjs.

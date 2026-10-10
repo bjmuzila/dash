@@ -59,9 +59,13 @@
 //           first), each with how far price is from it and a ✕; Disarm all.
 //   Fired   what rang today (kept in this browser, cleared each ET day), each
 //           with Ring again to arm it once more.
-// The tab counts are Armed on every symbol and Fired today. The All switch
-// sits by the price; Desktop notifications at the foot. The old paragraph is
-// the head's tooltip.
+//   Lists   one list per level (★ Volt: NVDA, AMD, TSLA …), watched by the
+//           SERVER every minute whether or not Vela is open, and staying armed
+//           with a cooldown. levels/levelLists.ts + server-v2/vela-alert-lists.cjs
+//           (Brandon, 2026-10-10).
+// The tab counts are Armed on every symbol, Fired today and tickers on Lists.
+// The All switch sits by the price; Desktop notifications at the foot. The old
+// paragraph is the head's tooltip.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { OHLCV, Vela } from '@luxalgo/vela'
@@ -78,6 +82,7 @@ import { replayActive } from '@/pages/vela/replay/clock'
 import { deliverAlert, enableNotify, notifyWanted } from '@/pages/vela/script/alerts'
 import { ARMED_KEY } from './levelAlertsEntry'
 import { isMarkKey, markSvg } from '@/pages/vela/levelMarks'
+import { createListsView, listCount, startListsPoll, type ListsView } from './levelLists'
 
 export type Group = 'Voltick' | 'Session' | 'Prior'
 
@@ -404,10 +409,13 @@ export function startWatch(ws: VelaWorkspace): () => void {
     if (document.hidden) return
     for (const sym of new Set(armed.map((a) => a.sym))) void levelsFor(sym)
   }, 60_000)
+  // the server watches the Lists; this tab only picks up their rings to toast them
+  const stopLists = startListsPoll()
   offWatch = () => {
     offC()
     offD()
     clearInterval(timer)
+    stopLists()
     for (const off of offs.values()) off()
     offs.clear()
     watching = null
@@ -480,12 +488,12 @@ function toggle(label: string, on: boolean, title: string): HTMLButtonElement {
   return b
 }
 
-type Tab = 'levels' | 'armed' | 'fired'
+type Tab = 'levels' | 'armed' | 'fired' | 'lists'
 const TAB_KEY = 'cb-vela-level-tab'
 function readTab(): Tab {
   try {
     const t = localStorage.getItem(TAB_KEY)
-    return t === 'armed' || t === 'fired' ? t : 'levels'
+    return t === 'armed' || t === 'fired' || t === 'lists' ? t : 'levels'
   } catch {
     return 'levels'
   }
@@ -499,7 +507,7 @@ function saveTab(t: Tab): void {
 }
 
 const HINT =
-  'Tap a level to be told when price crosses it. A Volt, Reversal, Surge, Coil or Flip alert follows that level as it moves. Each fires once, then shows under Fired.'
+  'Tap a level to be told when price crosses it. A Volt, Reversal, Surge, Coil or Flip alert follows that level as it moves. Each fires once, then shows under Fired. To watch one level on many tickers and keep it armed, use Lists.'
 
 export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onChart: (chart?: Vela) => void; destroy: () => void } {
   const root = el('div', 'cb-lv')
@@ -514,6 +522,11 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
   const otherReads = new Map<string, LevelRead>()
 
   const readOf = (s: string): LevelRead | null => (s === sym ? read : otherReads.get(s) ?? null)
+  /** Where draw() writes. The root, except around the Lists view (see draw). */
+  let into: ParentNode = root
+  const put = (...nodes: Node[]) => into.append(...nodes)
+  /** The Lists tab: one persistent element, made on first visit. */
+  let lists: ListsView | null = null
 
   // ── the head: symbol, price, All ──
   const drawHead = () => {
@@ -526,18 +539,19 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
     all.disabled = armable(levels).length === 0 && !armed.some((a) => a.sym === sym)
     all.addEventListener('click', () => setAllArmed(sym, levels, !allOn))
     head.append(all)
-    root.append(head)
+    put(head)
   }
 
   // ── the tabs ──
   const drawTabs = () => {
     const bar = el('div', 'cb-lv-tabs')
     bar.setAttribute('role', 'tablist')
-    const counts: Record<Tab, number> = { levels: 0, armed: armed.length, fired: firedToday().length }
+    const counts: Record<Tab, number> = { levels: 0, armed: armed.length, fired: firedToday().length, lists: listCount() }
     for (const [t, label] of [
       ['levels', 'Levels'],
       ['armed', 'Armed'],
       ['fired', 'Fired'],
+      ['lists', 'Lists'],
     ] as Array<[Tab, string]>) {
       const b = el('button', 'cb-lv-tab', label)
       b.type = 'button'
@@ -553,20 +567,20 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
       })
       bar.append(b)
     }
-    root.append(bar)
+    put(bar)
   }
 
   // ── Levels: tiles ──
   const drawLevels = () => {
     if (!read) {
-      root.append(el('p', 'cb-lv-hint', 'Reading the levels…'))
+      put(el('p', 'cb-lv-hint', 'Reading the levels…'))
       return
     }
     const px = read.price
     for (const group of ['Voltick', 'Session', 'Prior'] as Group[]) {
       const levels = read.levels.filter((l) => l.group === group)
       if (!levels.length) continue
-      root.append(el('div', 'cb-lv-group', GROUP_LABEL[group]))
+      put(el('div', 'cb-lv-group', GROUP_LABEL[group]))
       const tiles = el('div', 'cb-lv-tiles')
       for (const lv of levels) {
         const on = isArmed(sym, lv.key)
@@ -595,14 +609,14 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
         tile.addEventListener('click', () => toggleArmed(sym, lv))
         tiles.append(tile)
       }
-      root.append(tiles)
+      put(tiles)
     }
   }
 
   // ── Armed: every symbol ──
   const drawArmed = () => {
     if (!armed.length) {
-      root.append(el('p', 'cb-lv-empty', 'Nothing is armed. Tap a level under Levels to arm it.'))
+      put(el('p', 'cb-lv-empty', 'Nothing is armed. Tap a level under Levels to arm it.'))
       return
     }
     const rows = armed.map((a) => {
@@ -637,7 +651,7 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
       x.title = `Disarm the ${a.sym} ${inSentence(a.name)} alert`
       x.addEventListener('click', () => disarm(a.id))
       row.append(who, st, x)
-      root.append(row)
+      put(row)
     }
     const acts = el('div', 'cb-lv-acts')
     const off = el('button', 'cb-lv-btn', 'Disarm all')
@@ -645,14 +659,14 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
     off.title = 'Disarm every level alert, on every symbol'
     off.addEventListener('click', () => disarmAll())
     acts.append(off)
-    root.append(acts)
+    put(acts)
   }
 
   // ── Fired: today ──
   const drawFired = () => {
     const today = firedToday()
     if (!today.length) {
-      root.append(el('p', 'cb-lv-empty', 'Nothing has fired today.'))
+      put(el('p', 'cb-lv-empty', 'Nothing has fired today.'))
     }
     for (const f of today) {
       const row = el('div', 'cb-lv-ar')
@@ -672,9 +686,9 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
       again.title = on ? `The ${f.sym} ${inSentence(f.name)} is armed` : `Arm the ${f.sym} ${inSentence(f.name)} again`
       again.addEventListener('click', () => rearm(f))
       row.append(who, again)
-      root.append(row)
+      put(row)
     }
-    root.append(el('p', 'cb-lv-hint', "Fired alerts also land in the toolbar's Alerts feed and the Script Alerts log."))
+    put(el('p', 'cb-lv-hint', "Fired alerts also land in the toolbar's Alerts feed and the Script Alerts log."))
   }
 
   // ── the foot: desktop notifications ──
@@ -686,11 +700,29 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
       void enableNotify(!on).then(() => draw())
     })
     foot.append(sw)
-    root.append(foot)
+    put(foot)
   }
 
   const draw = () => {
     if (!alive) return
+    if (tab === 'lists') {
+      // The Lists view is never detached: a ticker half typed in it survives the
+      // 30 s redraw. Everything around it is rebuilt in place.
+      lists ??= createListsView(() => draw())
+      const keep = lists.el
+      for (const c of [...root.childNodes]) if (c !== keep) root.removeChild(c)
+      if (keep.parentNode !== root) root.append(keep)
+      const pre = document.createDocumentFragment()
+      into = pre
+      drawHead()
+      drawTabs()
+      root.insertBefore(pre, keep)
+      into = root
+      lists.render(sym)
+      drawFoot()
+      return
+    }
+    into = root
     root.replaceChildren()
     drawHead()
     drawTabs()
@@ -758,6 +790,8 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
       offMarket?.()
       offMarket = null
       armSubs.delete(draw)
+      lists?.destroy()
+      lists = null
     },
   }
 }
