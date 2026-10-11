@@ -279,10 +279,18 @@ function section() {
   }
 
   items.sort((a, b) => b.at.localeCompare(a.at));
+
+  // How long each dashboard process ran before the next start (the last one is
+  // still running). Feeds the Node uptime card's bars: a row of ~24h bars is
+  // the nightly restart doing its job; short ones are crashes or deploys.
+  const boots = ledger.filter((e) => e.type === 'boot').map((e) => ({ at: e.at, t: Date.parse(e.at), version: e.version || null }))
+    .filter((b) => Number.isFinite(b.t)).sort((a, b) => a.t - b.t);
+  const sessions = boots.map((b, i) => ({ at: b.at, version: b.version, sec: Math.round(((i + 1 < boots.length ? boots[i + 1].t : now) - b.t) / 1000) })).slice(-30);
   const lastNight = items.find((i) => i.kind === 'nightly' || i.kind === 'nightly-missed') || null;
   const lastLib = checks[checks.length - 1] || null;
   return {
     items: items.slice(0, 80),
+    sessions,
     lastNightly: lastNight ? { at: lastNight.at, level: lastNight.level } : null,
     lastLibCheck: lastLib ? { at: lastLib.at, status: lastLib.status, latest: lastLib.latest || null, range: lastLib.range || null } : null,
     sources: {

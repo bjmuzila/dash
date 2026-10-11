@@ -90,6 +90,17 @@ log_history() {
 version_note() {
   git log -1 --format=%b --grep="^${1}\$" 2>/dev/null | grep -m1 -v '^[[:space:]]*$' | tr '\t' ' ' | cut -c1-200 || true
 }
+# The note for this deploy: the typed one if the push carried it, otherwise the
+# one scripts/deploy-note.py wrote in the background. Prints "" when neither.
+deploy_note() {
+  local n; n="$(version_note "$WANT_VERSION")"
+  if [ -z "$n" ] && [ -n "${NOTE_PID:-}" ]; then
+    wait "$NOTE_PID" 2>/dev/null || true
+    n="$(head -n1 "${NOTE_FILE:-/dev/null}" 2>/dev/null | tr '\t' ' ' | cut -c1-200 || true)"
+  fi
+  rm -f "${NOTE_FILE:-}" 2>/dev/null || true
+  printf '%s' "$n"
+}
 
 # Images of services that BUILD (have a build: section), as "service image".
 built_images() {
@@ -218,6 +229,15 @@ if [ -z "$FROM" ] || ! git cat-file -e "$FROM^{commit}" 2>/dev/null; then
   warn "no known previous deploy — doing a full deploy"; FULL=1; FROM="$TO"
 fi
 WANT_VERSION="$(version_at HEAD)"
+# The one-line note for this deploy, written while the images build (never
+# waited on longer than its own 25 s timeout, never fails the deploy). A note
+# typed with `push.ps1 -Note` wins — see deploy_note below.
+NOTE_FILE="$STATE/note.$$"
+NOTE_PID=""
+if [ -f scripts/deploy-note.py ] && [ "$FROM" != "$TO" ]; then
+  ( python3 scripts/deploy-note.py "$FROM" "$TO" > "$NOTE_FILE" 2>/dev/null || true ) &
+  NOTE_PID=$!
+fi
 say "deploying $(git rev-parse --short "$FROM") -> $(git rev-parse --short "$TO") ($WANT_VERSION)"
 
 # Build args the dashboard bakes into its client bundle. Only these — .env.local
@@ -320,6 +340,7 @@ fi
 if [ "$MODE" = selective ] && [ ${#BUILD_SVCS[@]} -eq 0 ] && [ ${#RECREATE_SVCS[@]} -eq 0 ]; then
   say "nothing deployable changed (tooling / version bump only) — leaving every container running"
   printf '%s\t%s\n' "$TO" "$WANT_VERSION" > "$STATE/last-ok"
+  [ -n "$NOTE_PID" ] && kill "$NOTE_PID" 2>/dev/null; rm -f "$NOTE_FILE" 2>/dev/null || true
   log_history "noop	$WANT_VERSION	$(git rev-parse --short "$FROM")->$(git rev-parse --short "$TO")"
   exit 0
 fi
@@ -355,9 +376,9 @@ if [ "$MODE" = full ] || [ ${#TARGETS[@]} -gt 0 ]; then
     if grep -qiE '50[0-9] |gateway|timeout|timed out|TLS handshake|connection reset|i/o timeout|unexpected EOF|toomanyrequests|no such host' "$STATE/build.log"; then
       warn "build failed on what looks like a network/registry error — retrying once in 20s"
       sleep 20
-      build_once || { log_history "build-failed	$WANT_VERSION"; die "build failed twice — nothing was restarted, the old version is still live"; }
+      build_once || { NOTE="$(deploy_note)"; log_history "build-failed	$WANT_VERSION${NOTE:+	note=$NOTE}"; die "build failed twice — nothing was restarted, the old version is still live"; }
     else
-      log_history "build-failed	$WANT_VERSION"
+      NOTE="$(deploy_note)"; log_history "build-failed	$WANT_VERSION${NOTE:+	note=$NOTE}"
       die "build failed — nothing was restarted, the old version is still live (log: $STATE/build.log)"
     fi
   fi
@@ -397,19 +418,19 @@ if [ "$OK" = 1 ] && [ "$MODE" = full ]; then check_dashboard "$WANT_VERSION" || 
 if [ "$OK" = 0 ]; then
   $DC ps --format '{{.Name}}  {{.Status}}' | sed 's/^/    /'
   if [ "$AUTO_ROLLBACK" = 1 ]; then
-    log_history "failed	$WANT_VERSION	mode=$MODE	auto-rollback"
+    NOTE="$(deploy_note)"; log_history "failed	$WANT_VERSION	mode=$MODE	auto-rollback${NOTE:+	note=$NOTE}"
     do_rollback "health gate failed for $WANT_VERSION"
     wait_healthy dashboard vela || true
     die "$WANT_VERSION did not come up healthy and was rolled back. Logs: docker compose logs --since 10m dashboard"
   fi
-  log_history "failed	$WANT_VERSION	mode=$MODE	no-rollback"
+  NOTE="$(deploy_note)"; log_history "failed	$WANT_VERSION	mode=$MODE	no-rollback${NOTE:+	note=$NOTE}"
   die "$WANT_VERSION did not come up healthy (DEPLOY_AUTO_ROLLBACK=0, left in place). Roll back with: bash deploy.sh rollback"
 fi
 
 printf '%s\t%s\n' "$TO" "$WANT_VERSION" > "$STATE/last-ok"
 docker image prune -f >/dev/null 2>&1 || true
 SECS=$(( $(now_s) - T0 ))
-NOTE="$(version_note "$WANT_VERSION")"
+NOTE="$(deploy_note)"
 log_history "ok	$WANT_VERSION	mode=$MODE	build=[${BUILD_SVCS[*]:-all}]	recreate=[${RECREATE_SVCS[*]:-}]	${SECS}s${NOTE:+	note=$NOTE}"
 $DC ps --format '{{.Name}}  {{.Status}}' | sed 's/^/    /'
 say "done — $WANT_VERSION live in ${SECS}s (roll back with: bash deploy.sh rollback)"

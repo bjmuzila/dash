@@ -6,6 +6,9 @@
 #   -Rollback    : put the previous deploy's images back on the VPS (seconds, no
 #                  rebuild, nothing committed). Works during market hours.
 #   -Status      : show what is live on the VPS and what -Rollback would restore
+#   -Note "..."  : the one-line note shown beside this version on owner -> Vela
+#                  Health -> Activity. Optional: without it, deploy.sh has Claude
+#                  write one from the diff (scripts/deploy-note.py).
 #
 # The VPS side of a deploy is deploy.sh (in the repo, pulled before it runs): it
 # rebuilds only the services a commit touched, health-checks the result and puts
@@ -16,7 +19,8 @@ param(
     [switch]$NoCache,
     [switch]$Force,
     [switch]$Rollback,
-    [switch]$Status
+    [switch]$Status,
+    [string]$Note = ""
 )
 
 # --- VPS deploy target ---
@@ -104,7 +108,10 @@ if ($doLocalBuild) {
 
 # --- 3. Commit + push main ---
 git add -A
-git commit -m "$version"
+# A typed note rides in the commit body; deploy.sh reads it before falling back
+# to the generated one. Tabs and newlines are flattened (the history is one line).
+$noteLine = ($Note -replace "[\t\r\n]+", " ").Trim()
+if ($noteLine) { git commit -m "$version" -m "$noteLine" } else { git commit -m "$version" }
 if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit (or commit failed) - stopping." -ForegroundColor Red; exit 1 }
 git push origin main
 if ($LASTEXITCODE -ne 0) { Write-Host "git push main FAILED - stopping." -ForegroundColor Red; exit 1 }

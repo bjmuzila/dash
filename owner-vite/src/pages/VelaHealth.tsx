@@ -59,12 +59,16 @@ interface Health {
   env: Record<string, string | number | boolean | null>;
   problems: Problem[];
   activity?: Activity;
+  history?: History;
 }
 interface ActivityItem {
   at: string; kind: "deploy" | "deploy-failed" | "rollback" | "nightly" | "nightly-missed" | "lib-check" | "restart";
   level: Level; title: string; detail?: string | null; note?: string | null;
 }
-interface Activity { items?: ActivityItem[]; error?: string; sources?: Record<string, string> }
+interface Activity { items?: ActivityItem[]; error?: string; sources?: Record<string, string>; sessions?: { at: string; sec: number; version: string | null }[] }
+/** healthz.cjs samples once a minute, keeps 12 hours, and sends them as 48
+ *  fifteen-minute bars (historyOut) — t is each bar's end. */
+interface History { stepSec: number; t: number[]; s: Record<string, (number | null)[]> }
 interface Ready { ok: boolean; rth: boolean; reasons: string[]; dbMs: number | null; feed: { spotAgeSec: number | null; feedAgeSec: number | null } | null }
 
 /** /api/hetzner-metrics and /api/cloudflare-metrics — the same two routes Admin's
@@ -116,34 +120,29 @@ function Pill({ level, children }: { level: Level; children: ReactNode }) {
   );
 }
 
-/** One monitor: a dot, a name, the headline number, one line under it. */
-function Monitor({ level, name, value, sub, compact }: { level: Level; name: string; value: string; sub?: string; compact?: boolean }) {
-  return (
-    <div style={{ background: T.panelInset, border: `1px solid ${level === "ok" ? T.border : ownerRgba(LEVEL_COLOR[level], 0.5)}`, borderRadius: 12, padding: compact ? "10px 11px" : "12px 14px", display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Dot level={level} />
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.green }}>{name}</span>
-      </div>
-      <span style={{ ...mono, fontSize: compact ? 16 : 20, fontWeight: 700, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</span>
-      {sub && <span style={{ fontSize: 12, color: T.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={sub}>{sub}</span>}
-    </div>
-  );
-}
+/** A card's recent past: values (null = no sample), optional per-bar colours
+ *  for state series, the sample times for the hover, and `floor` to scale from
+ *  the window's minimum (spot: 7826 vs 7831 is the whole story). */
+interface Trend { data: (number | null)[]; times?: number[]; stepMs?: number; colors?: (string | undefined)[]; color?: string; fmt: (v: number) => string; floor?: boolean; full?: boolean; caption?: string }
 
 // ── bar cards (uptime / last tick / egress) ──
 
 const fmtMb = (v: number) => (v < 1024 ? `${v.toFixed(1)} MB` : v < 1024 * 1024 ? `${(v / 1024).toFixed(2)} GB` : `${(v / 1024 / 1024).toFixed(2)} TB`);
 
-/** Fold a long sample array into at most `n` bars (mean per bucket) so a 30d
- *  series and a 1h series draw the same bar width. */
-function bucket(data: number[], n = SERIES_MAX): number[] {
+/** Fold a long sample array into at most `n` bars so a 30d series and a 1h
+ *  series draw the same bar width. Mean per bucket by default; `pick: "min"`
+ *  keeps the worst reading (state series, where 0 = down must not average away). */
+function bucket(data: number[], n?: number): number[];
+function bucket(data: (number | null)[], n?: number, pick?: "mean" | "min" | "last"): (number | null)[];
+function bucket(data: (number | null)[], n = SERIES_MAX, pick: "mean" | "min" | "last" = "mean"): (number | null)[] {
   if (data.length <= n) return data;
-  const out: number[] = [];
+  const out: (number | null)[] = [];
   for (let i = 0; i < n; i++) {
     const a = Math.floor((i * data.length) / n);
     const b = Math.max(a + 1, Math.floor(((i + 1) * data.length) / n));
-    const slice = data.slice(a, b);
-    out.push(slice.reduce((s, v) => s + v, 0) / slice.length);
+    const slice = data.slice(a, b).filter((v): v is number => v != null && Number.isFinite(v));
+    if (!slice.length) { out.push(null); continue; }
+    out.push(pick === "min" ? Math.min(...slice) : pick === "last" ? slice[slice.length - 1] : slice.reduce((s, v) => s + v, 0) / slice.length);
   }
   return out;
 }
@@ -173,7 +172,7 @@ function DeltaPill({ delta, invert = false, text, title, color: textColor }: { d
     dir = mag < 0.05 ? "flat" : delta > 0 ? "up" : "down";
     const good = invert ? delta < 0 : delta > 0;
     color = dir === "flat" ? T.cyan : good ? T.green : T.red;
-    label = mag >= 1000 ? `${(mag / 1000).toFixed(1)}K%` : `${mag.toFixed(1)}%`;
+    label = mag >= 999.95 ? "999+%" : mag >= 100 ? `${Math.round(mag)}%` : `${mag.toFixed(1)}%`;
   }
   return (
     <span
@@ -200,19 +199,30 @@ function DeltaPill({ delta, invert = false, text, title, color: textColor }: { d
   );
 }
 
-function Bars({ data, color, fmt }: { data: number[]; color: string; fmt: (v: number) => string }) {
-  const max = Math.max(0, ...data);
+const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+function Bars({ data, color = T.cyan, fmt, floor, full, colors, times, stepMs }: Omit<Trend, "caption">) {
+  const when = (i: number) => (times?.[i] ? (stepMs ? `${hhmm(times[i] - stepMs)}–${hhmm(times[i])}` : hhmm(times[i])) : "");
+  const vals = data.filter((v): v is number => v != null && Number.isFinite(v));
+  const max = Math.max(0, ...vals);
+  const min = floor && vals.length ? Math.min(...vals) : 0;
+  const span = max - min;
+  const hPct = (v: number) => {
+    if (full) return 100;
+    if (floor) return span > 0 ? 12 + ((v - min) / span) * 88 : 56;
+    return max > 0 ? Math.max(4, (v / max) * 100) : 4;
+  };
   return (
     <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 46, borderBottom: `1px solid ${T.border}`, marginTop: 4 }}>
-      {data.length < 2 && <span style={{ fontSize: 12, color: T.cyan, alignSelf: "center" }}>collecting…</span>}
-      {data.length >= 2 && data.map((v, i) => (
+      {vals.length < 2 && <span style={{ fontSize: 12, color: T.cyan, alignSelf: "center" }}>collecting…</span>}
+      {vals.length >= 2 && data.map((v, i) => (
         <span
           key={i}
-          title={fmt(v)}
+          title={v == null ? `${when(i) ? `${when(i)} · ` : ""}no sample` : `${fmt(v)}${when(i) ? ` · ${when(i)}` : ""}`}
           style={{
             flex: "1 1 0", minWidth: 1, borderRadius: "2px 2px 0 0",
-            height: `${max > 0 ? Math.max(4, (v / max) * 100) : 4}%`,
-            background: color, opacity: i === data.length - 1 ? 1 : 0.5,
+            height: v == null ? 0 : `${hPct(v)}%`,
+            background: colors?.[i] ?? color, opacity: i === data.length - 1 ? 1 : 0.5,
           }}
         />
       ))}
@@ -220,8 +230,10 @@ function Bars({ data, color, fmt }: { data: number[]; color: string; fmt: (v: nu
   );
 }
 
-function BarCard({ level, name, value, sub, pill, data, color, fmt, compact }: {
-  level: Level; name: string; value: string; sub: string; pill: ReactNode; data: number[]; color: string; fmt: (v: number) => string; compact?: boolean;
+/** One monitor: a dot, a name, the headline number, one line under it, and —
+ *  when there is a trend — its recent past as bars. */
+function BarCard({ level, name, value, sub, pill, trend, compact }: {
+  level: Level; name: string; value: string; sub?: string; pill?: ReactNode; trend?: Trend; compact?: boolean;
 }) {
   return (
     <div style={{ background: T.panelInset, border: `1px solid ${level === "ok" ? T.border : ownerRgba(LEVEL_COLOR[level], 0.5)}`, borderRadius: 12, padding: compact ? "10px 11px" : "12px 14px", display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
@@ -234,8 +246,8 @@ function BarCard({ level, name, value, sub, pill, data, color, fmt, compact }: {
         <span style={{ ...mono, fontSize: compact ? 16 : 20, fontWeight: 700, color: T.text, whiteSpace: "nowrap" }}>{value}</span>
         {compact && pill}
       </div>
-      <span style={{ fontSize: 12, color: T.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={sub}>{sub}</span>
-      <Bars data={data} color={color} fmt={fmt} />
+      {sub && <span style={{ fontSize: 12, color: T.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={sub}>{sub}</span>}
+      {trend && <div style={{ marginTop: "auto" }}><Bars {...trend} /></div>}
     </div>
   );
 }
@@ -345,6 +357,10 @@ const ACT_ICON: Record<ActivityItem["kind"], { glyph: string; color: string }> =
   restart: { glyph: "↻", color: T.gold },
 };
 
+// Eight rows show; the rest of the week scrolls inside the card.
+const ACT_ROWS = 8;
+const ACT_ROW_PX = 37;
+
 function dayLabel(ms: number): string {
   const d = new Date(ms); d.setHours(0, 0, 0, 0);
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -355,11 +371,8 @@ function dayLabel(ms: number): string {
 }
 
 function ActivityFeed({ activity }: { activity?: Activity }) {
-  const [all, setAll] = useState(false);
   const isMobile = useIsMobile();
-  const items = activity?.items ?? [];
-  const cutoff = Date.now() - 3 * 86_400_000;
-  const shown = all ? items : items.filter((i) => Date.parse(i.at) >= cutoff);
+  const shown = activity?.items ?? [];
   const groups: { label: string; rows: ActivityItem[] }[] = [];
   for (const it of shown) {
     const label = dayLabel(Date.parse(it.at));
@@ -372,21 +385,21 @@ function ActivityFeed({ activity }: { activity?: Activity }) {
     <Panel
       title="Activity"
       subtitle="pushes · 2 AM restart · Vela library check"
-      right={items.length > shown.length || all ? (
-        <button type="button" onClick={() => setAll((v) => !v)} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 12 }}>{all ? "Last 3 days" : "Show 7 days"}</button>
-      ) : undefined}
+      right={shown.length > ACT_ROWS ? <span style={{ fontSize: 12, color: T.cyan, whiteSpace: "nowrap" }}>{shown.length} in 7 days · scroll</span> : undefined}
     >
       {activity?.error && <Foot>{activity.error === "not-loaded" ? "server-v2/activity.cjs is not on the running server yet." : activity.error}</Foot>}
       {!activity?.error && shown.length === 0 && <Foot>Nothing recorded yet. Entries start with the next deploy, the 2 AM restart and the 7:59 AM library check.</Foot>}
+      {groups.length > 0 && (
+      <div style={{ maxHeight: ACT_ROWS * ACT_ROW_PX, overflowY: "auto", overscrollBehavior: "contain", marginRight: -8, paddingRight: 8 }}>
       {groups.map((g) => (
         <div key={g.label} style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: T.green, padding: "2px 0 4px" }}>{g.label}</span>
+          <span style={{ position: "sticky", top: 0, zIndex: 1, background: T.panelBgStrong, fontSize: 12, fontWeight: 700, color: T.green, padding: "2px 0 4px" }}>{g.label}</span>
           {g.rows.map((it, i) => {
             const ic = it.level === "ok" ? ACT_ICON[it.kind] : { ...ACT_ICON[it.kind], color: LEVEL_COLOR[it.level] };
             const pill = it.kind === "deploy" ? (it.detail?.replace("live in ", "") || "live") : it.level === "ok" ? "ok" : it.kind === "lib-check" ? "update" : it.level === "down" ? (it.kind === "nightly-missed" ? "missed" : "failed") : "check";
             const pc = it.kind === "deploy" ? T.cyan : it.level === "ok" ? T.green : LEVEL_COLOR[it.level];
             return (
-              <div key={`${it.at}-${i}`} style={{ display: "grid", gridTemplateColumns: isMobile ? "22px minmax(0, 1fr) auto" : "22px 76px minmax(0, 1fr) auto", gap: 10, alignItems: "center", padding: "7px 0", borderTop: i ? `1px solid ${ownerRgba("#FFFFFF", 0.05)}` : "none" }}>
+              <div key={`${it.at}-${i}`} style={{ display: "grid", gridTemplateColumns: isMobile ? "22px minmax(0, 1fr) auto" : "22px 76px minmax(0, 1fr) auto", gap: 10, alignItems: "center", padding: "7px 0", minHeight: ACT_ROW_PX, boxSizing: "border-box", borderTop: i ? `1px solid ${ownerRgba("#FFFFFF", 0.05)}` : "none" }}>
                 <span aria-hidden style={{ width: 22, height: 22, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, lineHeight: 1, color: ic.color, background: ownerRgba(ic.color, 0.14) }}>{ic.glyph}</span>
                 {!isMobile && <span style={{ ...mono, fontSize: 12, color: T.cyan, whiteSpace: "nowrap" }}>{new Date(it.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}
                 <span style={{ minWidth: 0, fontSize: 13, lineHeight: 1.35 }}>
@@ -403,9 +416,51 @@ function ActivityFeed({ activity }: { activity?: Activity }) {
           })}
         </div>
       ))}
+      </div>
+      )}
       {missing.length > 0 && <Foot>Not reporting: {missing.join(" · ")}</Foot>}
     </Panel>
   );
+}
+
+// ── each card's recent past, from healthz.cjs's minute samples ──
+const STATE_COLOR = (v: number | null) => (v == null ? undefined : v >= 2 ? T.green : v >= 1 ? T.gold : T.red);
+function trendsFor(h: Health): Record<string, Trend> {
+  const hist = h.history;
+  if (!hist || !hist.t?.length) return {};
+  // The server already folded 12 h of minutes into these bars (worst-of for
+  // states and lags, mean for levels), so they are drawn as they come.
+  const n = hist.t.length;
+  const times = hist.t;
+  const stepMs = hist.stepSec * 1000;
+  const get = (k: string, pick: "mean" | "min" = "mean") => bucket(hist.s[k] ?? [], n, pick);
+  const num1 = (v: number) => (Math.round(v * 10) / 10).toLocaleString();
+  const n0 = (v: number) => Math.round(v).toLocaleString();
+  const rec = get("rec", "min");
+  const recN = get("recN", "min");
+  const env = get("env", "min").map((v) => (v == null ? null : v > 0 ? 1 : 2));
+  const feed = get("feed", "min");
+  const out: Record<string, Trend> = {
+    tick: { data: get("tick"), times, fmt: (v) => `worst ${Math.round(v)}s since tick` },
+    Feed: { data: feed, colors: feed.map(STATE_COLOR), times, full: true, fmt: (v) => (v >= 2 ? "live" : v >= 1 ? "idle" : "down") },
+    Spot: { data: get("spot"), times, floor: true, color: T.lightBlue, fmt: (v) => v.toFixed(2) },
+    Socket: { data: get("cl"), times, color: T.cyan, fmt: (v) => `${num1(v)} clients` },
+    Postgres: { data: get("db"), times, color: T.cyan, fmt: (v) => `worst ${n0(v)} ms` },
+    Recorders: {
+      data: rec.map((v, i) => (v == null || !recN[i] ? null : v / (recN[i] as number))),
+      colors: rec.map((v, i) => (v == null || recN[i] == null ? undefined : v >= (recN[i] as number) ? T.green : T.gold)),
+      times, fmt: (v) => `${Math.round(v * 100)}% fresh`,
+    },
+    "Event loop": { data: get("p99"), times, color: T.green, fmt: (v) => `worst p99 ${n0(v)} ms` },
+    Memory: { data: get("rss"), times, color: T.cyan, fmt: (v) => `${n0(v)} MB` },
+    "Chains cache": { data: get("ck"), times, color: T.cyan, fmt: (v) => `${n0(v)} keys` },
+    "Vela history": { data: get("hc"), times, color: T.cyan, fmt: (v) => `${n0(v)} cached` },
+    "LSE vault": { data: get("lse"), times, color: T.green, fmt: (v) => `${n0(v)} used` },
+    "Vela users": { data: get("ses"), times, color: T.lightBlue, fmt: (v) => `${num1(v)} on` },
+    "Env flags": { data: env, colors: env.map(STATE_COLOR), times, full: true, fmt: (v) => (v >= 2 ? "as expected" : "a flag is off") },
+  };
+  for (const k of Object.keys(out)) out[k].stepMs = stepMs;
+  return out;
 }
 
 // ── the monitors, derived from the body ──
@@ -493,9 +548,6 @@ export default function VelaHealth() {
   const [now, setNow] = useState(Date.now());
   const [showRaw, setShowRaw] = useState(false);
   const [strip, setStrip] = useState<{ at: number; level: Level; problems: number }[]>([]);
-  // This tab's per-poll samples for the two cards that only report "right now".
-  const [uptimeSeries, setUptimeSeries] = useState<number[]>([]);
-  const [tickSeries, setTickSeries] = useState<number[]>([]);
   const [hetzner, setHetzner] = useState<HetznerMetrics | null>(null);
   const [cf, setCf] = useState<CfMetrics | null>(null);
   const inflight = useRef(false);
@@ -509,8 +561,8 @@ export default function VelaHealth() {
       const [hr, rr, hz, cfr] = await Promise.all([
         fetch(`/api/healthz${fresh ? "?fresh=1" : ""}`, { cache: "no-store", credentials: "include" }),
         fetch("/api/healthz/ready", { cache: "no-store", credentials: "include" }).catch(() => null),
-        fetch("/api/hetzner-metrics?window=live", { cache: "no-store", credentials: "include" }).catch(() => null),
-        fetch("/api/cloudflare-metrics?window=live", { cache: "no-store", credentials: "include" }).catch(() => null),
+        fetch("/api/hetzner-metrics?window=h12", { cache: "no-store", credentials: "include" }).catch(() => null),
+        fetch("/api/cloudflare-metrics?window=h12", { cache: "no-store", credentials: "include" }).catch(() => null),
       ]);
       // Hosting numbers: merge-don't-blank, same as Admin — a flaky upstream poll
       // holds the last good reading instead of wiping the card.
@@ -535,8 +587,6 @@ export default function VelaHealth() {
       }
       setH(body);
       setErr(null);
-      if (Number.isFinite(body.process?.uptimeSec)) setUptimeSeries((s) => [...s, body.process.uptimeSec].slice(-SERIES_MAX));
-      if (body.feed?.lastFeedAgeSec != null && Number.isFinite(body.feed.lastFeedAgeSec)) setTickSeries((s) => [...s, body.feed.lastFeedAgeSec as number].slice(-SERIES_MAX));
       setStrip((s) => [...s, { at: Date.now(), level: body.verdict, problems: body.problems.length }].slice(-STRIP_MAX));
       if (rr) setReady({ status: rr.status, body: (await rr.json().catch(() => null)) as Ready | null });
     } catch (e) {
@@ -565,40 +615,61 @@ export default function VelaHealth() {
   const uptimeNow = h?.process?.uptimeSec != null ? h.process.uptimeSec + sinceHeld : null;
   const tickNow = h?.feed?.lastFeedAgeSec != null ? h.feed.lastFeedAgeSec + sinceHeld : null;
   const tickLevel: Level = tickNow == null ? "warn" : !h?.rth ? "ok" : tickNow > 60 ? "down" : tickNow > 10 ? "warn" : "ok";
-  const cfBars = bucket(cf?.egress.spark ?? []);
-  const hzBars = bucket(hetzner?.bandwidth.spark ?? []);
+  // Same 12 h as every other card: the routes' h12 window, 15-minute bars.
+  const cfBars = bucket(cf?.egress.spark ?? [], 48);
+  const trends = h ? trendsFor(h) : {};
+  // Uptime: one bar per run of the process, from the boot ledger (activity.cjs).
+  // A row of ~24h bars is the 2 AM restart doing its job; short ones are deploys
+  // or crashes. The last bar is the run that's still going.
+  const sessions = (h?.activity?.sessions ?? []).slice(-SERIES_MAX);
+  const tickTrend = trends.tick;
+  const hzBars = bucket(hetzner?.bandwidth.spark ?? [], 48);
+  // Spark arrays carry no timestamps; they're evenly spaced over the 12 h ending
+  // at fetchedAt (15 min each, or 1 h if Cloudflare fell back to hourly).
+  const evenTrend = (data: number[], endIso: string | undefined, color: string): Trend => {
+    const end = endIso ? Date.parse(endIso) : NaN;
+    const stepMs = data.length ? (12 * 3_600_000) / data.length : undefined;
+    return {
+      data, color, fmt: fmtMb, stepMs,
+      times: Number.isFinite(end) && stepMs ? data.map((_, i) => end - (data.length - 1 - i) * stepMs) : undefined,
+    };
+  };
   const barCards = h ? [
     {
       level: (uptimeNow != null && uptimeNow < 300 ? "warn" : "ok") as Level,
       name: "Node uptime",
       value: dur(uptimeNow),
-      sub: "server-v2 process · per poll",
+      sub: "server-v2 process · each bar a run",
       pill: <DeltaPill text={`boot ${clock(h.process?.startedAt).slice(0, 5)}`} title={`Process started ${h.process?.startedAt ? new Date(h.process.startedAt).toLocaleString() : "—"}`} />,
-      data: uptimeSeries, color: T.lightBlue, fmt: (v: number) => dur(v),
+      trend: {
+        data: sessions.map((x, i) => (i === sessions.length - 1 && uptimeNow != null ? uptimeNow : x.sec)),
+        times: sessions.map((x) => Date.parse(x.at)),
+        color: T.lightBlue, fmt: (v: number) => `ran ${dur(v)}`,
+      } as Trend,
     },
     {
       level: tickLevel,
       name: "dxLink last tick",
       value: tickNow != null ? `${Math.round(tickNow)}s` : "—",
       sub: `TT feed lag${h.rth ? "" : " · market closed"}`,
-      pill: <DeltaPill delta={barDelta(tickSeries)} invert title="Newest poll vs the average of this tab's earlier polls · up = feed falling behind" />,
-      data: tickSeries, color: tickLevel === "ok" ? T.green : LEVEL_COLOR[tickLevel], fmt: (v: number) => `${Math.round(v)}s`,
+      pill: <DeltaPill delta={tickTrend ? barDelta(tickTrend.data.filter((v): v is number => v != null)) : null} invert title="Latest 15 min vs the 12 h average · up = feed falling behind" />,
+      trend: tickTrend ? { ...tickTrend, color: tickLevel === "ok" ? T.green : LEVEL_COLOR[tickLevel] } : undefined,
     },
     {
       level: (cf?.unconfigured ? "warn" : "ok") as Level,
-      name: "Cloudflare egress · 24h",
+      name: "Cloudflare egress · 12h",
       value: cf?.egress.value != null ? fmtMb(cf.egress.value) : cf?.unconfigured ? "Setup" : "—",
       sub: cf?.unconfigured ? "needs CLOUDFLARE_API_TOKEN" : "edge bandwidth served",
-      pill: <DeltaPill delta={barDelta(cfBars)} invert title="Newest bar vs the 24h average · up = more bandwidth than usual" />,
-      data: cfBars, color: T.orange, fmt: fmtMb,
+      pill: <DeltaPill delta={barDelta(cfBars)} invert title="Latest 15 min vs the 12 h average · up = more bandwidth than usual" />,
+      trend: evenTrend(cfBars, cf?.fetchedAt, T.orange),
     },
     {
       level: (hetzner?.unconfigured ? "warn" : "ok") as Level,
-      name: "Hetzner egress · 1h",
+      name: "Hetzner egress · 12h",
       value: hetzner?.bandwidth.value != null ? fmtMb(hetzner.bandwidth.value) : hetzner?.unconfigured ? "Setup" : "—",
       sub: hetzner?.unconfigured ? "needs HETZNER_API_TOKEN" : "VPS network out",
-      pill: <DeltaPill delta={barDelta(hzBars)} invert title="Newest bar vs the 1h average · up = more bandwidth than usual" />,
-      data: hzBars, color: T.cyan, fmt: fmtMb,
+      pill: <DeltaPill delta={barDelta(hzBars)} invert title="Latest 15 min vs the 12 h average · up = more bandwidth than usual" />,
+      trend: evenTrend(hzBars, hetzner?.fetchedAt, T.cyan),
     },
   ] : [];
 
@@ -677,7 +748,7 @@ export default function VelaHealth() {
           {/* ── the monitors ── */}
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: isMobile ? 8 : 12 }}>
             {barCards.map((c) => <BarCard key={c.name} {...c} compact={isMobile} />)}
-            {mons.map((m) => <Monitor key={m.name} {...m} compact={isMobile} />)}
+            {mons.map((m) => <BarCard key={m.name} {...m} trend={trends[m.name]} compact={isMobile} />)}
           </div>
 
           {/* ── activity: pushes, the 2 AM restart, the Vela library check ── */}

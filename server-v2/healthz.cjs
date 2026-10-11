@@ -412,14 +412,128 @@ async function buildBody(ctx, libDb) {
 /** The full body, held HOLD_MS for every reader. fresh=true rebuilds now. */
 async function full(ctx, libDb, { fresh = false } = {}) {
   const now = Date.now();
-  if (!fresh && held && now >= held.at && now - held.at < HOLD_MS) return { ...held.body, heldAt: held.at };
+  if (!fresh && held && now >= held.at && now - held.at < HOLD_MS) return { ...held.body, heldAt: held.at, history: historyOut() };
   if (!building) {
     building = buildBody(ctx, libDb)
       .then((body) => { held = { at: Date.now(), body }; return held; })
       .finally(() => { building = null; });
   }
   const h = await building;
-  return { ...h.body, heldAt: h.at };
+  return { ...h.body, heldAt: h.at, history: historyOut() };
+}
+
+/* ── history: one sample a minute, for the bars on Vela Health's cards ────────
+   Every number on the monitor cards is a "right now" reading. This keeps the
+   last SAMPLE_KEEP of them (12 hours at one a minute) so each card can draw
+   its own recent past — sent to the page as HIST_BARS 15-minute bars, not
+   720 raw points, so a 30 s poll stays small. The sampler builds the body itself — no page has to be
+   open — through its own internalFetch (same shape server-with-proxy.js gives
+   api-router) and the libDb api-router hands over with attach(). Samples are
+   written to state/activity/samples.json every few minutes so a restart (the
+   2 AM one included) doesn't blank the bars. */
+const fs = require('fs');
+const path = require('path');
+const SAMPLE_MS = 60_000;
+const SAMPLE_KEEP = 720;              // 12 h
+const HIST_BARS = 48;                 // 15 min each
+// How each card's minutes fold into one bar: the worst reading for states and
+// lags (one bad minute must not average away), the mean for levels.
+const PICK = { tick: 'max', feed: 'min', db: 'max', rec: 'min', recN: 'max', p99: 'max', lmax: 'max', env: 'max', spot: 'last' };
+const SAMPLES_FILE = path.join(process.env.STATE_DIR || path.join(__dirname, '..', 'state'), 'activity', 'samples.json');
+let samples = [];
+try {
+  const raw = JSON.parse(fs.readFileSync(SAMPLES_FILE, 'utf8'));
+  if (Array.isArray(raw)) samples = raw.filter((s) => s && Date.now() - s.t < SAMPLE_KEEP * SAMPLE_MS * 1.5).slice(-SAMPLE_KEEP);
+} catch { /* first run, or unreadable — start empty */ }
+let sampler = null;
+let attachedDb = null;
+
+const selfCtx = {
+  internalFetch: (pathname, init = {}) => {
+    const headers = { ...(init.headers || {}) };
+    if (process.env.INTERNAL_API_TOKEN) headers['x-internal-token'] = process.env.INTERNAL_API_TOKEN;
+    return fetch(`http://127.0.0.1:${process.env.PORT || 3001}${pathname}`, { ...init, headers });
+  },
+};
+
+/** One reading from a built body. Short keys: this array rides every /healthz. */
+function sampleOf(b) {
+  const f = b.feed || {};
+  const recs = Object.values(b.recorders || {});
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    t: Date.now(),
+    tick: n(f.lastFeedAgeSec),
+    feed: f.error ? 0 : f.idle ? 1 : f.dxlinkConnected && f.ttAuthenticated ? 2 : 0,
+    spot: n(f.spot),
+    cl: n(b.socket?.clients),
+    mbm: n(b.socket?.mbPerMin),
+    db: b.db?.ok ? n(b.db.latencyMs) : null,
+    rec: recs.filter((r) => r.state === 'ok').length,
+    recN: recs.length,
+    p99: n(b.process?.loop?.p99Ms),
+    lmax: n(b.process?.loop?.maxMs),
+    rss: n(b.process?.rssMb),
+    ck: n(b.vela?.chains?.keys),
+    hc: n(b.vela?.history?.entries),
+    lse: n(b.probes?.lse?.used),
+    ses: n(b.vela?.usage?.sessions15m),
+    env: (b.problems || []).filter((p) => p.code.startsWith('env.')).length,
+  };
+}
+function persistSamples() {
+  try {
+    fs.mkdirSync(path.dirname(SAMPLES_FILE), { recursive: true });
+    const tmp = SAMPLES_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(samples));
+    fs.renameSync(tmp, SAMPLES_FILE);
+  } catch { /* the bars just start fresh after a restart */ }
+}
+async function takeSample() {
+  const last = samples[samples.length - 1];
+  if (last && Date.now() - last.t < SAMPLE_MS * 0.8) return;
+  try {
+    const h = await full(selfCtx, attachedDb);
+    samples.push(sampleOf(h));
+    if (samples.length > SAMPLE_KEEP) samples = samples.slice(-SAMPLE_KEEP);
+    if (samples.length % 5 === 0) persistSamples();
+  } catch { /* skip this minute */ }
+}
+/** api-router calls this once with its DB layer; the web process starts sampling. */
+function attach({ libDb } = {}) {
+  attachedDb = libDb || null;
+  if (sampler || process.env.PROCESS_ROLE === 'jobs') return;
+  // First sample once the feed has had a moment to connect after boot.
+  setTimeout(() => { takeSample(); }, 45_000).unref?.();
+  sampler = setInterval(() => { takeSample(); }, SAMPLE_MS);
+  sampler.unref?.();
+  process.once('SIGTERM', persistSamples);
+}
+/** The last 12 h as HIST_BARS time buckets ending now — what the page draws.
+ *  A bucket with no samples (the box was down, or before the first sample) is
+ *  null, so a gap shows as a gap. */
+function historyOut() {
+  const keys = ['tick', 'feed', 'spot', 'cl', 'mbm', 'db', 'rec', 'recN', 'p99', 'lmax', 'rss', 'ck', 'hc', 'lse', 'ses', 'env'];
+  const stepMs = (SAMPLE_KEEP * SAMPLE_MS) / HIST_BARS;
+  const end = Date.now();
+  const start = end - HIST_BARS * stepMs;
+  const groups = Array.from({ length: HIST_BARS }, () => []);
+  for (const x of samples) {
+    const i = Math.floor((x.t - start) / stepMs);
+    if (i >= 0 && i < HIST_BARS) groups[i].push(x);
+  }
+  const fold = (rows, k) => {
+    const v = rows.map((r) => r[k]).filter((n) => typeof n === 'number' && Number.isFinite(n));
+    if (!v.length) return null;
+    const how = PICK[k] || 'mean';
+    if (how === 'max') return Math.max(...v);
+    if (how === 'min') return Math.min(...v);
+    if (how === 'last') return v[v.length - 1];
+    return Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 100) / 100;
+  };
+  const s = {};
+  for (const k of keys) s[k] = groups.map((g) => fold(g, k));
+  return { stepSec: stepMs / 1000, t: groups.map((_, i) => Math.round(start + (i + 1) * stepMs)), s };
 }
 
 let readyHeld = null;
@@ -461,4 +575,4 @@ async function ready(ctx, libDb) {
   return body;
 }
 
-module.exports = { probe, full, ready, isRth, _problemsOf: problemsOf };
+module.exports = { probe, full, ready, isRth, attach, _problemsOf: problemsOf, _sampleOf: sampleOf };

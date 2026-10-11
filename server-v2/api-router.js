@@ -71,6 +71,8 @@ catch (e) { console.warn('[api-router] _lib-db.cjs not loaded — DB routes stay
 let healthz = null;
 try { healthz = require('./healthz.cjs'); }
 catch (e) { console.warn('[api-router] healthz.cjs not loaded — /healthz stays off:', e.message); }
+// The once-a-minute sampler behind Vela Health's card bars needs the DB layer.
+try { healthz?.attach?.({ libDb }); } catch { /* never block boot */ }
 function healthProbe(name, fn) { try { healthz?.probe(name, fn); } catch { /* never block boot */ } }
 
 // Additional pure (Next-free) compute libs, bundled the same way:
@@ -1208,15 +1210,17 @@ register('/api/cloudflare-metrics', {
     try {
       const TOKEN = process.env.CLOUDFLARE_API_TOKEN ?? ''; const ZONE_ID = process.env.CLOUDFLARE_ZONE_ID ?? '';
       const GQL = 'https://api.cloudflare.com/client/v4/graphql';
-      const WINDOWS = { live: 3_600_000 * 24, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 };
+      // h12 (2026-10-10): owner → Vela Health's 12-hour cards, 15-minute bars.
+      const WINDOWS = { h12: 12 * 3_600_000, live: 3_600_000 * 24, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 };
       const sp = new URL(req.url || '/', 'http://localhost').searchParams;
       const win = sp.get('window') ?? 'live';
-      const downsample = (vals, max = 40) => { if (vals.length <= max) return vals; const bucket = vals.length / max; const out = []; for (let i = 0; i < max; i++) { const slice = vals.slice(Math.floor(i * bucket), Math.floor((i + 1) * bucket)); if (slice.length) out.push(slice.reduce((a, b) => a + b, 0)); } return out; };
+      const downsample = (vals, max = win === 'h12' ? 48 : 40) => { if (vals.length <= max) return vals; const bucket = vals.length / max; const out = []; for (let i = 0; i < max; i++) { const slice = vals.slice(Math.floor(i * bucket), Math.floor((i + 1) * bucket)); if (slice.length) out.push(slice.reduce((a, b) => a + b, 0)); } return out; };
       if (!TOKEN || !ZONE_ID)
         return send(res, 200, { ok: false, window: win, egress: { value: null, unit: 'MB', window: win, spark: [] }, fetchedAt: new Date().toISOString(), unconfigured: true });
-      const planFor = w => w === 'live' ? { dataset: 'httpRequestsAdaptiveGroups', dim: 'datetimeHour' } : w === 'weekly' ? { dataset: 'httpRequests1hGroups', dim: 'datetimeHour' } : { dataset: 'httpRequests1dGroups', dim: 'date' };
+      const planFor = w => w === 'h12' ? { dataset: 'httpRequestsAdaptiveGroups', dim: 'datetimeFifteenMinutes' } : w === 'live' ? { dataset: 'httpRequestsAdaptiveGroups', dim: 'datetimeHour' } : w === 'weekly' ? { dataset: 'httpRequests1hGroups', dim: 'datetimeHour' } : { dataset: 'httpRequests1dGroups', dim: 'date' };
       const ms = WINDOWS[win] ?? WINDOWS.live; const now = new Date(); const end = now.toISOString(); const start = new Date(now.getTime() - ms).toISOString();
-      const { dataset, dim } = planFor(win);
+      let { dataset, dim } = planFor(win);
+      const queryFor = (ds, dm) => `query Egress($zone: String!, $start: Time!, $end: Time!) { viewer { zones(filter: { zoneTag: $zone }) { ${ds}(limit: 5000 filter: { datetime_geq: $start, datetime_leq: $end } orderBy: [${dm}_ASC]) { sum { edgeResponseBytes } dimensions { ${dm} } } } } }`;
       const query = `query Egress($zone: String!, $start: Time!, $end: Time!) { viewer { zones(filter: { zoneTag: $zone }) { ${dataset}(limit: 5000 filter: { datetime_geq: $start, datetime_leq: $end } orderBy: [${dim}_ASC]) { sum { edgeResponseBytes } dimensions { ${dim} } } } } }`;
       async function fetchCf(qq, variables) {
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -1229,7 +1233,10 @@ register('/api/cloudflare-metrics', {
         }
         return null;
       }
-      const resp = await fetchCf(query, { zone: ZONE_ID, start, end });
+      let resp = await fetchCf(query, { zone: ZONE_ID, start, end });
+      // A plan that doesn't expose 15-minute buckets answers with errors (null
+      // here): fall back to hourly for the same 12 h rather than a blank card.
+      if (!resp && win === 'h12') { dim = 'datetimeHour'; resp = await fetchCf(queryFor(dataset, dim), { zone: ZONE_ID, start, end }); }
       const groups = resp?.data?.viewer?.zones?.[0]?.[dataset] ?? [];
       const perBucketBytes = groups.map(g => Number(g.sum?.edgeResponseBytes ?? 0)).filter(n => !Number.isNaN(n));
       const totalBytes = perBucketBytes.reduce((a, b) => a + b, 0);
@@ -1247,8 +1254,9 @@ register('/api/hetzner-metrics', {
     try {
       const TOKEN = process.env.HETZNER_API_TOKEN ?? ''; const SERVER_ID = process.env.HETZNER_SERVER_ID ?? '';
       const BASE = 'https://api.hetzner.cloud/v1';
-      const WINDOWS = { live: 3_600_000, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 };
-      const stepFor = w => w === 'live' ? 60 : w === 'weekly' ? 3600 : 21600;
+      // h12 (2026-10-10): owner → Vela Health's 12-hour cards, 15-minute steps.
+      const WINDOWS = { h12: 12 * 3_600_000, live: 3_600_000, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 };
+      const stepFor = w => w === 'h12' ? 900 : w === 'live' ? 60 : w === 'weekly' ? 3600 : 21600;
       const seriesValues = (resp, key) => { const s = resp?.metrics?.time_series?.[key]; if (!s?.values?.length) return []; return s.values.map(([, v]) => Number(v)).filter(n => !Number.isNaN(n)); };
       const latest = v => v.length ? v[v.length - 1] : null;
       const avg = v => v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
@@ -1277,7 +1285,7 @@ register('/api/hetzner-metrics', {
       const cpuValRaw = cpuFn(cpuVals); const cpuFraction = cpuValRaw != null ? cpuValRaw / 100 : null;
       const bytesTransferred = netVals.reduce((acc, bps) => acc + bps * step, 0);
       const bandwidthMb = netVals.length ? bytesTransferred / (1024 * 1024) : null;
-      const bwSparkMb = downsample(netVals.map(bps => (bps * step) / (1024 * 1024)));
+      const bwSparkMb = downsample(netVals.map(bps => (bps * step) / (1024 * 1024)), win === 'h12' ? 48 : 40);
       const ok = cpuVals.length > 0 || netVals.length > 0;
       send(res, 200, { ok, window: win, cpu: { value: cpuFraction, unit: 'cpu', window: win, spark: downsample(cpuVals.map(v => v / 100)) }, bandwidth: { value: bandwidthMb, unit: 'MB', window: win, spark: bwSparkMb }, memory: { value: memBytes, unit: 'bytes', window: win, spark: [] }, fetchedAt: end });
     } catch (err) { send(res, 500, { error: String(err) }); }
