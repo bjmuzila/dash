@@ -1509,7 +1509,11 @@
 /* W3 · the context card (2026-10-06): what the print means. A card with no
    context (the journal markers) keeps the plain layout above. */
 .cb-wh-card.cb-wh-cx {
-  width: 256px;
+  /* as wide as its widest line (2026-10-10: the fill column ran off the 256px card),
+     never narrower than it was, never wider than the window */
+  width: max-content;
+  min-width: 256px;
+  max-width: min(400px, calc(100vw - 16px));
   padding: 9px 11px;
   border-left-width: 1px;
   border-left-color: var(--color-line);

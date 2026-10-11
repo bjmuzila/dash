@@ -73,7 +73,23 @@ DC="docker compose"
 
 version_at() { git show "${1:-HEAD}:package.json" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true; }
 now_s() { date +%s; }
-log_history() { printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >> "$HISTORY"; }
+# Each line also goes to state/deploy-history.log: ./state is mounted at
+# /app/state, so owner → Vela Health's Activity card can read the deploys
+# (server-v2/activity.cjs). The first time, it is seeded with the history so far.
+# A mirror that fails never fails the deploy.
+MIRROR="$ROOT/state/deploy-history.log"
+log_history() {
+  local line; line="$(date -u +%FT%TZ)	$*"
+  printf '%s\n' "$line" >> "$HISTORY"
+  { mkdir -p "$ROOT/state" && { [ -f "$MIRROR" ] || cp "$HISTORY" "$MIRROR"; } && \
+    { tail -n 1 "$MIRROR" 2>/dev/null | grep -qxF "$line" || printf '%s\n' "$line" >> "$MIRROR"; }; } 2>/dev/null || true
+}
+# The one-line note for a version: the first non-blank line of the BODY of the
+# commit whose subject is that version (push.ps1 commits as "vM.D.N"). Empty
+# when the push carried no note. Tabs are flattened so the log stays parseable.
+version_note() {
+  git log -1 --format=%b --grep="^${1}\$" 2>/dev/null | grep -m1 -v '^[[:space:]]*$' | tr '\t' ' ' | cut -c1-200 || true
+}
 
 # Images of services that BUILD (have a build: section), as "service image".
 built_images() {
@@ -393,6 +409,7 @@ fi
 printf '%s\t%s\n' "$TO" "$WANT_VERSION" > "$STATE/last-ok"
 docker image prune -f >/dev/null 2>&1 || true
 SECS=$(( $(now_s) - T0 ))
-log_history "ok	$WANT_VERSION	mode=$MODE	build=[${BUILD_SVCS[*]:-all}]	recreate=[${RECREATE_SVCS[*]:-}]	${SECS}s"
+NOTE="$(version_note "$WANT_VERSION")"
+log_history "ok	$WANT_VERSION	mode=$MODE	build=[${BUILD_SVCS[*]:-all}]	recreate=[${RECREATE_SVCS[*]:-}]	${SECS}s${NOTE:+	note=$NOTE}"
 $DC ps --format '{{.Name}}  {{.Status}}' | sed 's/^/    /'
 say "done — $WANT_VERSION live in ${SECS}s (roll back with: bash deploy.sh rollback)"

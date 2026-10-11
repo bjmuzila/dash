@@ -8,7 +8,6 @@
  *   OI, IV     the snapshot series /api/watch has recorded since it was added
  *   levels     Volt and Reversal off the full chain, three ways: the
  *              contract's own expiration, the nearest (0DTE) and all of them.
- *              CB Edge's "CB" is the Volt.
  *
  * LIVE DATA. Reads the CB Edge backend through this app's /api and /proxy
  * reverse proxy; see data.ts for every route and what it can and cannot say.
@@ -368,6 +367,34 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
   const [book, setBook] = useState<BookKey>("contract");
   const [hover, setHover] = useState<number | null>(null);
   const [ref, width] = useWidth<HTMLDivElement>();
+  const cardRef = useRef<HTMLElement | null>(null);
+  const [shot, setShot] = useState<"idle" | "busy" | "copied" | "saved" | "failed">("idle");
+
+  // Screenshot of this card: a PNG on the clipboard (paste straight into
+  // Discord), or a download where the browser will not take an image there.
+  const onShot = () => {
+    const node = cardRef.current;
+    if (!node || shot === "busy") return;
+    setShot("busy");
+    const name = `${c.ticker}-${fmtK(c.strike)}${c.side}-${c.expiry}-${todayEt()}.png`;
+    const png = renderCard(node);
+    const done = (st: "copied" | "saved" | "failed") => {
+      setShot(st);
+      window.setTimeout(() => setShot("idle"), 2000);
+    };
+    // The clipboard write starts inside the click with a promised blob, which
+    // is what Safari needs to allow it.
+    const CI = (window as unknown as { ClipboardItem?: new (i: Record<string, Promise<Blob>>) => unknown }).ClipboardItem;
+    const clip = navigator.clipboard as unknown as { write?: (d: unknown[]) => Promise<void> } | undefined;
+    const copy = CI && clip?.write ? clip.write([new CI({ "image/png": png })]) : Promise.reject(new Error("no clipboard"));
+    copy
+      .then(() => done("copied"))
+      .catch(() =>
+        png
+          .then((b) => { download(b, name); done("saved"); })
+          .catch(() => done("failed")),
+      );
+  };
 
   // price history for the window
   useEffect(() => {
@@ -457,7 +484,7 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
   const R = range.toUpperCase();
 
   return (
-    <section className="cd-dossier" style={{ background: ELEV, border: `1px solid ${LINE}`, borderRadius: R_LG, boxShadow: "0 8px 26px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.045)", padding: "18px 20px", minWidth: 0 }}>
+    <section ref={cardRef} className="cd-dossier" style={{ background: ELEV, border: `1px solid ${LINE}`, borderRadius: R_LG, boxShadow: "0 8px 26px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.045)", padding: "18px 20px", minWidth: 0 }}>
       {/* header */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
         <b style={{ fontSize: 20, color: PAPER }}>{c.ticker}</b>
@@ -470,9 +497,14 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
           {row?.note ? ` · ${row.note}` : ""}
         </span>
         {!row && (canTrack
-          ? <Btn small onClick={onTrack}>Track it</Btn>
+          ? <span data-noshot=""><Btn small onClick={onTrack}>Track it</Btn></span>
           : <Pill tone="plain">Not tracked</Pill>)}
         <div style={{ flex: 1 }} />
+        <span data-noshot="">
+          <Btn small kind="ghost" onClick={onShot} disabled={shot === "busy"} done={shot === "copied" || shot === "saved"}>
+            {shot === "busy" ? "Capturing" : shot === "copied" ? "✓ Copied" : shot === "saved" ? "✓ Saved" : shot === "failed" ? "Capture failed" : "⧉ Screenshot"}
+          </Btn>
+        </span>
         <div style={{ width: 170 }}>
           <Seg label="Window" value={range} onChange={setRange} options={[["5d", "5D"], ["1m", "1M"], ["3m", "3M"]]} />
         </div>
@@ -513,7 +545,7 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
             {added && <span style={{ color: tone(hb.c / added - 1) }}>vs added {fmtSigned((hb.c / added - 1) * 100, 1)}</span>}
           </>
         ) : (
-          <span style={{ color: PAPER_QUIET }}>
+          <span data-noshot="" style={{ color: PAPER_QUIET }}>
             {addedAt != null && !addedInWindow && bars.length
               ? `Added ${fmtMD(addedAt)}, before this window. Widen it to see the marker.`
               : "Hover the chart to read the price at any point."}
@@ -555,7 +587,7 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <div style={{ ...labelStyle, color: PAPER }}>Where this strike sits</div>
           <span style={{ fontSize: 11.5, color: PAPER_QUIET }}>
-            <span style={{ color: VOLT }}>{VOLT_MARK} Volt</span> is the biggest net GEX strike (CB on CB Edge).{" "}
+            <span style={{ color: VOLT }}>{VOLT_MARK} Volt</span> is the biggest net GEX strike.{" "}
             <span style={{ color: REVERSAL }}>{REVERSAL_MARK} Reversal</span> is the biggest on the other side of spot.
           </span>
         </div>
@@ -612,7 +644,7 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
         </div>
 
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 11.5, color: PAPER_QUIET, marginBottom: 2 }}>
+          <div data-noshot="" style={{ fontSize: 11.5, color: PAPER_QUIET, marginBottom: 2 }}>
             {shown ? `Ruler shows: ${bookTitle(book, shown, chain)}. Click a row to switch.` : "\u00a0"}
           </div>
           {width > 0 && (spot != null || shown) && (
@@ -623,8 +655,8 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
 
       <div style={{ marginTop: 14, fontSize: 11.5, color: PAPER_QUIET, lineHeight: 1.5 }}>
         Price and volume: dxLink candles via /proxy/option-history. Quote and greeks: TastyTrade, refreshed every 30s. OI, IV and net GEX: the
-        snapshots your watchlist records. Volt and Reversal: computed here from the full option chain (net GEX on OI + volume, every strike),
-        the same rule CB Edge uses for its CB. Analytics, not advice.
+        snapshots your watchlist records. Volt and Reversal: computed here from the full option chain (net GEX on OI + volume, every strike).
+        Analytics, not advice.
       </div>
     </section>
   );
@@ -691,6 +723,30 @@ const vsVolt = (d: number) => (Math.abs(d) < 1e-6 ? "at the Volt" : `${d > 0 ? "
 
 /** 420 → "420", 22.5 → "22.5" */
 const fmtK = (k: number) => (k % 1 ? String(+k.toFixed(2)) : k.toFixed(0));
+
+/** The card as a PNG at 2x. html-to-image loads on first use only. */
+async function renderCard(node: HTMLElement): Promise<Blob> {
+  const { toBlob } = await import("html-to-image");
+  const blob = await toBlob(node, {
+    pixelRatio: 2,
+    backgroundColor: ELEV,
+    // the screenshot button, the Track button and the "hover / click" hints stay out
+    filter: (n) => !(n instanceof HTMLElement && n.dataset.noshot != null),
+  });
+  if (!blob) throw new Error("capture failed");
+  return blob;
+}
+
+function download(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
 
 function Shimmer({ text }: { text: string }) {
   return (

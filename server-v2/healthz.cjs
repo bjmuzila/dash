@@ -85,6 +85,12 @@ let peakRss = 0;
   t.unref?.();
 }
 
+// Deploys, nightly restarts, the Vela library check (server-v2/activity.cjs).
+// Loading it records this boot; a failure to load just leaves the card empty.
+let activity = null;
+try { activity = require('./activity.cjs'); }
+catch (e) { console.warn('[healthz] activity.cjs not loaded:', e.message); }
+
 const probes = new Map();
 /** Register a subsystem's own report. fn() returns a small plain object. */
 function probe(name, fn) { if (typeof fn === 'function') probes.set(name, fn); }
@@ -352,6 +358,10 @@ function problemsOf(b) {
   const env = b.env || {};
   if (env.WS_DEFLATE !== 'default') add('env.WS_DEFLATE', 'warn', `is ${env.WS_DEFLATE}, expected default`);
   if (!env.WS_AUTH_REQUIRED) add('env.WS_AUTH_REQUIRED', 'warn', 'paid feed open to anyone with the URL');
+  const night = b.activity?.lastNightly;
+  if (night && night.level !== 'ok' && Date.now() - Date.parse(night.at) < 24 * 3600_000) {
+    add('schedule.nightly-restart', 'warn', night.level === 'down' ? 'did not run last night' : 'only part of the stack restarted');
+  }
   for (const [k, v] of Object.entries(b.probes || {})) {
     if (v && v.error) add(`probe.${k}`, 'warn', v.error);
     for (const w of (v && Array.isArray(v.problems) ? v.problems : [])) add(`${k}.${w.code}`, w.level || 'warn', w.note);
@@ -391,6 +401,7 @@ async function buildBody(ctx, libDb) {
     vela: { usage: vela, history: probeOut.velaHistory, chains: probeOut.chains },
     probes: probeOut,
     env: envSection(),
+    activity: (() => { try { return activity ? activity.section() : { error: 'not-loaded' }; } catch (e) { return errCell(e); } })(),
   };
   body.problems = problemsOf(body);
   body.ok = !body.problems.some((x) => x.level === 'down');
