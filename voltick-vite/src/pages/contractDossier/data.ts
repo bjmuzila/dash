@@ -16,9 +16,10 @@
  *                              added. Interval scales with the span on the server
  *                              (5m to 3d, 15m to 10d, 1h to 30d, 4h beyond).
  *   /proxy/probe-rest          the live quote + greeks for one contract (TT).
- *   /api/walls-range           call wall, put wall and CB per session for the
- *                              scanner universe (change-only log, carried forward
- *                              here to the latest value).
+ *   /api/chains                the full option chain (every expiration, slim
+ *                              legs). Volt and Reversal for the contract's own
+ *                              expiration, the nearest one (0DTE) and all of them
+ *                              summed are computed here from it. Volt = CB.
  *
  * Open interest and IV only exist from the day a contract was added: dxLink
  * candles carry price and volume, not OI or IV, and CB Edge keeps no
@@ -83,13 +84,6 @@ export interface Live {
   volume: number | null;
   spot: number | null;
   prevClose: number | null;
-}
-
-export interface Levels {
-  callWall: number | null;
-  putWall: number | null;
-  cb: number | null;
-  date: string | null;
 }
 
 /* ── small helpers ────────────────────────────────────────────────────────── */
@@ -407,27 +401,123 @@ export async function fetchLive(c: Contract, signal?: AbortSignal): Promise<Live
   };
 }
 
-/* ── /api/walls-range ─────────────────────────────────────────────────────── */
+/* ── /api/chains · Volt and Reversal, three ways ──────────────────────────── */
 
-export async function fetchLevels(ticker: string, signal?: AbortSignal): Promise<Levels | null> {
-  const q = new URLSearchParams({ symbol: ticker, days: "1" });
-  type Day = { date: string; log?: { level_type: string; strike: number | string; slot: number }[]; spot?: [number, number][] };
-  const j = await getJson<{ ok?: boolean; days?: Day[] }>(`/api/walls-range?${q}`, signal);
-  const day = (j.days || []).slice(-1)[0];
-  if (!day || !day.log?.length) return null;
-  // Change-only log: slot 0 pins the baseline, later slots only what moved. The
-  // latest value per level is the last row for it in slot order.
-  const last: Record<string, number> = {};
-  for (const r of [...day.log].sort((a, b) => a.slot - b.slot)) {
-    const k = Number(r.strike);
-    if (Number.isFinite(k) && k > 0) last[r.level_type] = k;
+/**
+ * Volt = the strike with the largest |net GEX|. Reversal = the largest |net GEX|
+ * on the OTHER side of spot from the Volt. Same rule as CB Edge's
+ * data/voltickLevels.ts vtFromLadder (and server-v2/vela-alert-lists.cjs), on
+ * the same per-strike formula as board/multiGreek/mgMath.ts strikeGex:
+ *
+ *   net = (|γc|·(oi+vol)c − |γp|·(oi+vol)p) · spot² · 0.01 · 100
+ *
+ * One read of the full chain gives all three books:
+ *   contract   only the contract's own expiration
+ *   front      the nearest expiration (0DTE when it expires today)
+ *   all        every listed expiration summed per strike
+ * CB Edge calls the Volt "CB": it is the same strike.
+ */
+export interface VoltSet {
+  expiry: string | null;   // the expiration (contract, front); null for all
+  volt: number | null;
+  reversal: number | null;
+  netAtStrike: number | null; // this book's net GEX at the contract's strike
+}
+
+export interface ChainLevels {
+  spot: number | null;
+  contract: VoltSet | null; // null when the chain no longer lists the expiry
+  front: VoltSet | null;
+  all: VoltSet | null;
+  expiries: number;
+}
+
+type Leg = { gamma: number; oi: number; vol: number } | null;
+type ChainRow = { strike: number; call: Leg; put: Leg };
+
+const n0 = (v: unknown) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+export function strikeGex(row: ChainRow, spot: number): number {
+  if (!(spot > 0)) return 0;
+  const cc = (row.call?.oi ?? 0) + (row.call?.vol ?? 0);
+  const pc = (row.put?.oi ?? 0) + (row.put?.vol ?? 0);
+  return (Math.abs(row.call?.gamma ?? 0) * cc - Math.abs(row.put?.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
+}
+
+export function voltOf(book: { strike: number; net: number }[], spot: number | null): { volt: number | null; reversal: number | null } {
+  const byAbs = book
+    .filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.net) && r.net !== 0)
+    .sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.strike - b.strike);
+  const volt = byAbs[0]?.strike ?? null;
+  if (volt == null) return { volt: null, reversal: null };
+  let reversal: number | null = null;
+  if (spot != null && spot > 0) {
+    const up = volt >= spot;
+    reversal = byAbs.find((r) => r.strike !== volt && (up ? r.strike < spot : r.strike >= spot))?.strike ?? null;
   }
-  return {
-    callWall: last.call_wall ?? null,
-    putWall: last.put_wall ?? null,
-    cb: last.cb ?? null,
-    date: day.date || null,
+  return { volt, reversal };
+}
+
+export function chainLevels(json: unknown, strike: number, expiry: string): ChainLevels {
+  type Raw = { data?: { underlyingPrice?: unknown; items?: { "expiration-date"?: string; strikes?: Record<string, any>[] }[] } };
+  const data = (json as Raw)?.data;
+  const spot = n0(data?.underlyingPrice) || null;
+  const leg = (raw: any): Leg => (raw ? { gamma: n0(raw.gamma), oi: n0(raw["open-interest"]), vol: n0(raw.volume) } : null);
+  const exps: { expiration: string; rows: ChainRow[] }[] = [];
+  for (const item of data?.items ?? []) {
+    const expiration = String(item?.["expiration-date"] ?? "");
+    if (!expiration) continue;
+    const rows: ChainRow[] = [];
+    for (const s of item.strikes ?? []) {
+      const k = n0(s?.["strike-price"]);
+      if (k > 0) rows.push({ strike: k, call: leg(s.call), put: leg(s.put) });
+    }
+    if (rows.length) exps.push({ expiration, rows });
+  }
+  exps.sort((a, b) => a.expiration.localeCompare(b.expiration));
+  const today = todayEt();
+  const live = exps.filter((e) => e.expiration >= today);
+  const near = (k: number, x: number) => Math.abs(k - x) < 1e-6;
+
+  const setOf = (rows: ChainRow[], exp: string | null): VoltSet | null => {
+    if (!spot || !rows.length) return null;
+    const book = rows.map((r) => ({ strike: r.strike, net: strikeGex(r, spot) }));
+    const { volt, reversal } = voltOf(book, spot);
+    return { expiry: exp, volt, reversal, netAtStrike: book.find((r) => near(r.strike, strike))?.net ?? null };
   };
+
+  const mine = exps.find((e) => e.expiration === expiry);
+  const front = live[0] ?? null;
+  const sum = new Map<number, { strike: number; net: number }>();
+  if (spot) {
+    for (const e of live) {
+      for (const r of e.rows) {
+        const cur = sum.get(r.strike) ?? { strike: r.strike, net: 0 };
+        cur.net += strikeGex(r, spot);
+        sum.set(r.strike, cur);
+      }
+    }
+  }
+  const allBook = [...sum.values()];
+  const allV = voltOf(allBook, spot);
+  return {
+    spot,
+    contract: mine ? setOf(mine.rows, mine.expiration) : null,
+    front: front ? setOf(front.rows, front.expiration) : null,
+    all: allBook.length
+      ? { expiry: null, ...allV, netAtStrike: allBook.find((r) => near(r.strike, strike))?.net ?? null }
+      : null,
+    expiries: live.length,
+  };
+}
+
+export async function fetchChainLevels(c: Contract, signal?: AbortSignal): Promise<ChainLevels> {
+  const q = new URLSearchParams({ ticker: c.ticker, range: "all", live: "0", slim: "1" });
+  const j = await getJson<unknown>(`/api/chains?${q}`, signal);
+  return chainLevels(j, c.strike, c.expiry);
 }
 
 /* ── formatting ───────────────────────────────────────────────────────────── */

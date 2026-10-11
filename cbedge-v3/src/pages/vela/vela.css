@@ -1591,7 +1591,8 @@
 }
 .cb-wh-cx .cb-wh-list {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  /* contract · DTE · fill (above ask … below bid) · premium */
+  grid-template-columns: 1fr auto auto auto;
   gap: 3px 10px;
   margin: 2px 0 7px;
   font-family: var(--font-mono);
@@ -5466,6 +5467,9 @@
 .vela-widget-tf-caret .cb-tf-ses {
   margin-left: 4px;
   color: var(--color-vt-quiet);
+  /* the toolbar's own size (2026-10-10): at 11px the tag sat centred in the bar but
+     its baseline rode ~1.5px above "1m", "Indicators" and the rest */
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 /* with starred timeframes Vela shows them as chips and this button is only an 18px
@@ -5474,7 +5478,7 @@
   width: auto;
   gap: 3px;
   padding: 0 4px 0 6px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 .vela-widget-tf-caret:not([data-solo='1']) .cb-tf-ses {
@@ -7009,4 +7013,35 @@
   border-top: 1px solid var(--color-line);
   color: var(--color-faint);
   font-size: var(--text-xs);
+}
+
+/* The bell's list: buttons to the alert side panels (alertBell.ts, 2026-10-10) */
+.cb-alb .cb-alb-acts {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-line);
+}
+.cb-alb .cb-alb-open {
+  flex: 1 1 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-raised);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.cb-alb .cb-alb-open:hover {
+  border-color: var(--color-vt-line);
+}
+
+/* the whale card's fill column: where each print filled against the quote */
+.cb-wh-cx .cb-wh-lf {
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+  align-self: center;
 }

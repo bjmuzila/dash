@@ -27,6 +27,8 @@
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { onScriptAlertFired, tfLabel, type FiredAlert } from '@/pages/vela/script/alerts'
+import { LEVELS_PANEL_ID } from '@/pages/vela/levels/levelAlertsEntry'
+import { ALERTS_PANEL_ID } from '@/pages/vela/script/ids'
 import { etDateKey } from '@/pages/vela/studies/common'
 
 export const ALERT_BELL_ID = 'cb-alerts'
@@ -251,6 +253,23 @@ function toggleList(ctx: WidgetContext): void {
       list.append(row)
     }
     menu.append(list)
+    // the side panels where alerts are set up (2026-10-10): the bell is the list of
+    // what rang; these open the panels that arm them
+    const acts = el('div', 'cb-alb-acts')
+    for (const [label, id, title] of [
+      ['Level alerts', LEVELS_PANEL_ID, 'Open the Level Alerts panel (Alt+A)'],
+      ['Script alerts', ALERTS_PANEL_ID, 'Open the Script Alerts panel'],
+    ] as const) {
+      const b = el('button', 'cb-alb-open', `${label} ›`)
+      b.type = 'button'
+      b.title = title
+      b.addEventListener('click', () => {
+        close()
+        ctx.togglePanel(id, true)
+      })
+      acts.append(b)
+    }
+    menu.append(acts)
     menu.append(el('div', 'cb-alb-foot', 'Kept for today only · clears at midnight ET'))
   }
 

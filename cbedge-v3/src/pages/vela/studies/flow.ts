@@ -695,6 +695,8 @@ interface WhRow {
   underlying: string | null
   /** The underlying's price when it printed. */
   spot: number | null
+  /** Where it filled against the quote (the server's tfClassify): above_ask · ask · mid · bid · below_bid; null unknown. */
+  side: string | null
 }
 /** The prints, plus — on ES / NQ — each session's basis (SPX / NDX prints sit at index prices). */
 interface WhData {
@@ -815,6 +817,10 @@ function moneyness(r: WhRow): { k: string; v: string } | null {
   return { k: d >= 0 ? 'OTM' : 'ITM', v: `${Math.abs(d * 100).toFixed(1)}%` }
 }
 
+/** Where the print filled against the quote, in words ('' when the server could not tell). */
+const FILL_WORD: Record<string, string> = { above_ask: 'Above ask', ask: 'Ask', mid: 'Mid', bid: 'Bid', below_bid: 'Below bid' }
+const fillOf = (r: WhRow): string => (r.side ? (FILL_WORD[r.side] ?? '') : '')
+
 /** `Put sold · bullish` — the contract, what was done with it, what that leans. */
 function printTitle(r: WhRow): string {
   const kind = r.type === 'C' ? 'Call' : r.type === 'P' ? 'Put' : 'Option'
@@ -840,9 +846,10 @@ function contextOf(rows: WhRow[], tone: Tone, priceLabel: string, lean: number |
       { k: 'SIZE', v: r.size == null ? '—' : Math.round(r.size).toLocaleString('en-US') },
       { k: 'PRICE', v: r.price == null ? '—' : r.price.toFixed(2) },
       { k: 'SPOT', v: r.spot == null ? '—' : r.spot.toFixed(2) },
-      { k: 'TIME', v: TIME_FMT.format(r.ts) },
+      // where it filled against the quote (2026-10-10); the time moves to the footer
+      { k: 'FILL', v: fillOf(r) || '—' },
     ]
-    return { title: printTitle(r), lean, cells, lines: [], foot: DAY_FMT.format(r.ts), rank: rankText }
+    return { title: printTitle(r), lean, cells, lines: [], foot: `${DAY_FMT.format(r.ts)} · ${TIME_FMT.format(r.ts)}`, rank: rankText }
   }
   const side = tone === 'up' ? 'bullish' : tone === 'down' ? 'bearish' : 'side unknown'
   const lines = sorted.slice(0, CARD_ROWS).map((r): WhaleCtxLine => {
@@ -853,6 +860,7 @@ function contextOf(rows: WhRow[], tone: Tone, priceLabel: string, lean: number |
     return {
       text: `${glyph} ${[strikeText(r.strike), r.type ?? ''].filter(Boolean).join(' ')}${exp ? ` · ${exp}` : ''}`,
       dte: dte == null ? '' : `${dte} DTE`,
+      fill: fillOf(r),
       amount: short(r.premium),
       tone: b > 0 ? 'up' : b < 0 ? 'down' : 'mid',
     }
@@ -1064,6 +1072,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
         action: r.action === 'BUY' || r.action === 'SELL' ? r.action : null,
         underlying: typeof r.underlying === 'string' ? r.underlying : null,
         spot: Number.isFinite(Number(r.spot)) && Number(r.spot) > 0 ? Number(r.spot) : null,
+        side: typeof r.side === 'string' ? r.side : null,
       }))
       .filter((r) => Number.isFinite(r.ts) && r.premium > 0)
     return { rows, basis, fromMs }

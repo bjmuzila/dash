@@ -55,6 +55,8 @@ export interface WhaleCtxLine {
   text: string
   /** `3 DTE` ('' when unknown) */
   dte: string
+  /** Where it filled: `Above ask` · `Ask` · `Mid` · `Bid` · `Below bid` ('' when unknown) */
+  fill: string
   amount: string
   tone: Tone
 }
@@ -159,7 +161,7 @@ function contextCard(c: WhaleContext, net: string, more: number): HTMLElement[] 
   }
   if (c.lines.length) {
     const list = div('cb-wh-list')
-    for (const l of c.lines) list.append(span('cb-wh-lt', l.text), span('cb-wh-ld', l.dte), span('cb-wh-amt', l.amount, l.tone))
+    for (const l of c.lines) list.append(span('cb-wh-lt', l.text), span('cb-wh-ld', l.dte), span('cb-wh-lf', l.fill || '—'), span('cb-wh-amt', l.amount, l.tone))
     out.push(list)
     if (more > 0) out.push(div('cb-wh-more', document.createTextNode(`+ ${more} more`)))
   }

@@ -1326,3 +1326,25 @@ span.cb-wla-hc,
 .cb-wla .cb-wla-soon {
   border-style: dashed;
 }
+
+/* Financials: a cell with a main line and a small second line (date · session,
+   move · date) — keeps the table to eight columns */
+.cb-wla .cb-wla-fin .cb-wla-two {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1.25;
+}
+.cb-wla .cb-wla-fin .cb-wla-two.num {
+  align-items: flex-end;
+}
+.cb-wla .cb-wla-fin .cb-wla-two small {
+  margin-left: 0;
+  font-size: var(--text-2xs);
+}
+/* the reaction chart closes the row: a little air after the averages */
+.cb-wla .cb-wla-fin .cb-wla-rx,
+.cb-wla .cb-wla-fin .cb-wla-hc.rx {
+  padding-left: 18px;
+}

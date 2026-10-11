@@ -6,7 +6,9 @@
  *              then the stretch since, with the added price and moment marked
  *   volume     the same bars' volume
  *   OI, IV     the snapshot series /api/watch has recorded since it was added
- *   context    where the strike sits against spot, the walls and the CB
+ *   levels     Volt and Reversal off the full chain, three ways: the
+ *              contract's own expiration, the nearest (0DTE) and all of them.
+ *              CB Edge's "CB" is the Volt.
  *
  * LIVE DATA. Reads the CB Edge backend through this app's /api and /proxy
  * reverse proxy; see data.ts for every route and what it can and cannot say.
@@ -21,13 +23,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { PageShell } from "../../components/PageCard";
 import {
-  ACCENT, ACCENT_TEXT, BAD, ELEV, GOOD, INK, LINE, MONO, PANEL, PAPER, PAPER_QUIET, R_LG, R_MD, SKY,
-  W_BOLD, W_DATA, labelStyle, numStyle, rgba,
+  ACCENT, ACCENT_TEXT, BAD, ELEV, GOOD, INK, LINE, MONO, PANEL, PAPER, PAPER_QUIET, R_LG, R_MD, REVERSAL,
+  REVERSAL_MARK, SKY, VOLT, VOLT_MARK, W_BOLD, labelStyle, numStyle, rgba,
 } from "../../theme";
 import { Btn, Pill, Seg, inputStyle, load, save } from "../spreadDesk/ui";
-import type { Bar, Contract, Levels, Live, RangeKey, WatchRow, WatchSnapshot } from "./data";
+import type { Bar, ChainLevels, Contract, Live, RangeKey, VoltSet, WatchRow, WatchSnapshot } from "./data";
 import {
-  HttpError, addToWatch, contractKey, dte, fetchBars, fetchLevels, fetchLive, fetchWatchHistory, fetchWatchlist,
+  HttpError, addToWatch, contractKey, dte, fetchBars, fetchChainLevels, fetchLive, todayEt, fetchWatchHistory, fetchWatchlist,
   fmtBig, fmtCount, fmtExpiry, fmtMD, fmtMDT, fmtPct, fmtPx, fmtSigned, ivPct, label, parseContract, refreshWatch,
   removeFromWatch, sameContract,
 } from "./data";
@@ -153,7 +155,7 @@ export default function ContractDossier() {
   return (
     <PageShell
       title="Contract dossier"
-      lede="Pick a contract and see its whole life, not just the part since you added it: price and volume from before you were watching, open interest and IV since, and where the strike sits against the walls."
+      lede="Pick a contract and see its whole life, not just the part since you added it: price and volume from before you were watching, open interest and IV since, and where the strike sits against the Volt and Reversal."
       maxWidth={1440}
     >
       <style>{CSS}</style>
@@ -361,7 +363,9 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
   const [barsErr, setBarsErr] = useState<string | null>(null);
   const [live, setLive] = useState<Live | null>(null);
   const [liveErr, setLiveErr] = useState<string | null>(null);
-  const [levels, setLevels] = useState<Levels | null | undefined>(undefined);
+  const [chain, setChain] = useState<ChainLevels | null | undefined>(undefined);
+  const [chainErr, setChainErr] = useState<string | null>(null);
+  const [book, setBook] = useState<BookKey>("contract");
   const [hover, setHover] = useState<number | null>(null);
   const [ref, width] = useWidth<HTMLDivElement>();
 
@@ -394,12 +398,23 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
     };
   }, [c]);
 
+  // the full chain once per contract: Volt and Reversal for three books
   useEffect(() => {
     const ac = new AbortController();
-    setLevels(undefined);
-    fetchLevels(c.ticker, ac.signal).then(setLevels).catch(() => { if (!ac.signal.aborted) setLevels(null); });
+    setChain(undefined);
+    setChainErr(null);
+    fetchChainLevels(c, ac.signal)
+      .then((cl) => {
+        setChain(cl);
+        if (!cl.contract) setBook(cl.front ? "front" : "all");
+      })
+      .catch((e) => {
+        if (ac.signal.aborted) return;
+        setChain(null);
+        setChainErr(e instanceof Error ? e.message : String(e));
+      });
     return () => ac.abort();
-  }, [c.ticker]);
+  }, [c]);
 
   const daily = range !== "5d";
   // Raw bars, no roll-up: the server already scales the interval with the window
@@ -416,10 +431,16 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
   const hiBar = bars.length ? Math.max(...bars.map((b) => b.c)) : null;
   const loBar = bars.length ? Math.min(...bars.map((b) => b.c)) : null;
   const fromHi = hiBar && now ? (now / hiBar - 1) * 100 : null;
+  const fromLo = loBar && now ? (now / loBar - 1) * 100 : null;
   const iv = ivPct(live?.iv ?? lastSnap?.iv ?? null);
   const delta = live?.delta ?? lastSnap?.delta ?? null;
   const theta = live?.theta ?? lastSnap?.theta ?? null;
-  const spot = live?.spot ?? lastSnap?.spot ?? null;
+  const spot = live?.spot ?? lastSnap?.spot ?? chain?.spot ?? null;
+  const firstSnap = snaps.length ? snaps[0] : null;
+  const ivSince = iv != null && firstSnap?.iv != null ? iv - (ivPct(firstSnap.iv) ?? iv) : null;
+  const oi = live?.oi ?? lastSnap?.open_interest ?? null;
+  const oiSince = oi != null && firstSnap?.open_interest != null && snaps.length > 1 ? oi - firstSnap.open_interest : null;
+  const vol = live?.volume ?? lastSnap?.volume ?? null;
   const dd = dte(c.expiry);
   const expired = dd < 0;
 
@@ -432,7 +453,8 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
   const toStrike = spot ? (c.strike / spot - 1) * 100 : null;
   const breakeven = now ? (isCall ? c.strike + now : c.strike - now) : null;
   const toBe = spot && breakeven ? (breakeven / spot - 1) * 100 : null;
-  const vsCb = levels?.cb ? c.strike - levels.cb : null;
+  const shown: VoltSet | null = chain ? chain[book] : null;
+  const R = range.toUpperCase();
 
   return (
     <section className="cd-dossier" style={{ background: ELEV, border: `1px solid ${LINE}`, borderRadius: R_LG, boxShadow: "0 8px 26px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.045)", padding: "18px 20px", minWidth: 0 }}>
@@ -456,20 +478,29 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
         </div>
       </div>
 
-      {/* stats */}
+      {/* stats: ten tiles, one shape, nothing cut off */}
       <div className="cd-stats">
-        <div>
-          <div style={{ ...labelStyle }}>{added ? "Since added" : "Today"}</div>
-          <div style={{ ...numStyle, fontWeight: W_DATA, fontSize: 28, letterSpacing: "-0.02em", color: tone(added ? since : day) }}>
-            {fmtPct(added ? since : day)}
-          </div>
-        </div>
-        <Stat k={added ? "Added → now" : "Mark"} v={added ? `${fmtPx(added)} → ${fmtPx(now)}` : fmtPx(now)}
-          s={live?.bid != null && live?.ask != null ? `${fmtPx(live.bid)} × ${fmtPx(live.ask)}` : liveErr ?? undefined} />
-        <Stat k={`${range.toUpperCase()} range`} v={loBar != null && hiBar != null ? `${fmtPx(loBar)} to ${fmtPx(hiBar)}` : "·"} />
-        <Stat k="From the high" v={fmtPct(fromHi, 0)} color={tone(fromHi)} />
-        <Stat k="IV · Δ · Θ" v={`${iv != null ? `${iv.toFixed(0)}%` : "·"} · ${greek(delta)} · ${greek(theta)}`} />
-        <Stat k="OI · volume" v={`${fmtCount(live?.oi ?? lastSnap?.open_interest)} · ${fmtCount(live?.volume ?? lastSnap?.volume)}`} />
+        {added ? (
+          <Tile k="Since added" v={since != null ? fmtPct(since) : null} color={tone(since)}
+            s={day != null ? `today ${fmtSigned(day, 1)}` : addedAt != null ? `added ${fmtMD(addedAt)}` : undefined} />
+        ) : (
+          <Tile k="Today" v={day != null ? fmtPct(day) : null} color={tone(day)} s="vs prior close" />
+        )}
+        {added ? (
+          <Tile k="Added at" v={fmtPx(added)} s={addedAt != null ? fmtMDT(addedAt) : undefined} />
+        ) : (
+          <Tile k="Prior close" v={live?.prevClose != null ? fmtPx(live.prevClose) : null} />
+        )}
+        <Tile k="Now" v={now != null ? fmtPx(now) : null}
+          s={live?.bid != null && live?.ask != null ? `${fmtPx(live.bid)} bid × ${fmtPx(live.ask)} ask` : liveErr ? "no live quote" : undefined} />
+        <Tile k={`${R} high`} v={hiBar != null ? fmtPx(hiBar) : null} s={fromHi == null ? undefined : Math.abs(fromHi) < 0.5 ? "at the high now" : `now ${fmtSigned(fromHi, 0)} from it`} />
+        <Tile k={`${R} low`} v={loBar != null ? fmtPx(loBar) : null} s={fromLo == null ? undefined : Math.abs(fromLo) < 0.5 ? "at the low now" : `now ${fmtSigned(fromLo, 0)} from it`} />
+        <Tile k="Implied vol" v={iv != null ? `${iv.toFixed(1)}%` : null} s={ivSince != null ? `${fmtSigned(ivSince, 1, " pts")} since added` : undefined} />
+        <Tile k="Delta" v={greek(delta)} s={delta != null ? `per $1 in ${c.ticker}` : undefined} />
+        <Tile k="Theta" v={greek(theta)} s={theta != null ? "per day" : undefined} />
+        <Tile k="Open interest" v={oi != null ? fmtCount(oi) : null}
+          s={oiSince != null ? `${oiSince >= 0 ? "+" : "−"}${fmtCount(Math.abs(oiSince))} since added` : undefined} />
+        <Tile k="Volume" v={vol != null ? fmtCount(vol) : null} s={vol != null ? "today" : undefined} />
       </div>
 
       {/* hover readout */}
@@ -519,29 +550,81 @@ function Dossier({ c, row, snaps, canTrack, onTrack }: { c: Contract; row: Watch
         )}
       </div>
 
-      {/* context */}
+      {/* levels */}
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${LINE}` }}>
-        <div style={{ ...labelStyle, color: PAPER }}>Where this strike sits</div>
-        <div style={{ marginTop: 6 }}>
-          {width > 0 && (spot != null || levels) && <LevelRuler levels={levels ?? null} spot={spot} strike={c.strike} width={width} />}
-          {levels === null && (
-            <div style={{ fontSize: 12, color: PAPER_QUIET, margin: "6px 0 2px" }}>
-              No wall history for {c.ticker} on the CB Edge scanner, so only spot and your strike are drawn.
-            </div>
-          )}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ ...labelStyle, color: PAPER }}>Where this strike sits</div>
+          <span style={{ fontSize: 11.5, color: PAPER_QUIET }}>
+            <span style={{ color: VOLT }}>{VOLT_MARK} Volt</span> is the biggest net GEX strike (CB on CB Edge).{" "}
+            <span style={{ color: REVERSAL }}>{REVERSAL_MARK} Reversal</span> is the biggest on the other side of spot.
+          </span>
         </div>
+
         <div className="cd-ctx">
-          <Stat k="To the strike" v={fmtSigned(toStrike, 1)} s={spot ? `spot ${fmtPx(spot)}` : undefined} />
-          <Stat k="Breakeven at expiry" v={fmtPx(breakeven)} s={toBe != null ? `${fmtSigned(toBe, 1)} from spot` : undefined} />
-          <Stat k="Strike vs CB" v={vsCb != null ? `${vsCb >= 0 ? "+" : "−"}${Math.abs(vsCb).toFixed(vsCb % 1 ? 1 : 0)} pts` : "·"}
-            s={levels?.cb ? `CB ${levels.cb}${levels.date ? ` · ${fmtMD(Date.parse(`${levels.date}T16:00:00Z`))}` : ""}` : undefined} />
-          <Stat k="Net GEX at strike" v={fmtBig(lastSnap?.net_gex)} s={row ? "call + put, OI + volume" : "recorded once tracked"} />
+          <Tile k="Spot" v={spot != null ? fmtPx(spot) : null} s={c.ticker} />
+          <Tile k="To the strike" v={toStrike != null ? fmtSigned(toStrike, 1) : null} s={`${fmtK(c.strike)}${c.side} from spot`} />
+          <Tile k="Breakeven at expiry" v={breakeven != null ? fmtPx(breakeven) : null} s={toBe != null ? `${fmtSigned(toBe, 1)} from spot` : undefined} />
+          <Tile k="Days left" v={expired ? "expired" : `${dd}`} s={fmtExpiry(c.expiry)} />
+        </div>
+
+        <div style={{ overflowX: "auto", marginTop: 12 }}>
+          <table className="cd-lv">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>Expirations</th>
+                <th><span style={{ color: VOLT }}>{VOLT_MARK}</span> Volt</th>
+                <th><span style={{ color: REVERSAL }}>{REVERSAL_MARK}</span> Reversal</th>
+                <th>Your strike vs Volt</th>
+                <th>Net GEX at your strike</th>
+              </tr>
+            </thead>
+            <tbody>
+              {BOOKS.map((bk) => {
+                const set = chain ? chain[bk] : null;
+                const on = book === bk && !!set;
+                return (
+                  <tr key={bk} className={on ? "on" : ""} onClick={() => set && setBook(bk)} style={{ cursor: set ? "pointer" : "default" }}>
+                    <td style={{ textAlign: "left" }}>
+                      <div style={{ fontFamily: "inherit", fontWeight: W_BOLD, color: PAPER, fontSize: 12.5 }}>{bookTitle(bk, set, chain)}</div>
+                      <div style={{ fontSize: 11, color: PAPER_QUIET, marginTop: 2 }}>{bookSub(bk, set, chain, c)}</div>
+                    </td>
+                    {chain === undefined ? (
+                      <td colSpan={4} style={{ color: PAPER_QUIET }}>reading the chain…</td>
+                    ) : !set ? (
+                      <td colSpan={4} style={{ color: PAPER_QUIET }}>
+                        {chainErr ? `chain did not load (${chainErr})` : bk === "contract" ? "this expiration is no longer listed" : "no chain"}
+                      </td>
+                    ) : (
+                      <>
+                        <LevelCell k={set.volt} spot={spot} color={VOLT} />
+                        <LevelCell k={set.reversal} spot={spot} color={REVERSAL} />
+                        <td>{set.volt != null ? vsVolt(c.strike - set.volt) : <Quiet />}</td>
+                        <td style={{ color: set.netAtStrike == null ? PAPER_QUIET : set.netAtStrike >= 0 ? GOOD : BAD }}>
+                          {set.netAtStrike != null ? fmtBig(set.netAtStrike) : "none listed"}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11.5, color: PAPER_QUIET, marginBottom: 2 }}>
+            {shown ? `Ruler shows: ${bookTitle(book, shown, chain)}. Click a row to switch.` : "\u00a0"}
+          </div>
+          {width > 0 && (spot != null || shown) && (
+            <LevelRuler volt={shown?.volt ?? null} reversal={shown?.reversal ?? null} spot={spot} strike={c.strike} width={width} />
+          )}
         </div>
       </div>
 
       <div style={{ marginTop: 14, fontSize: 11.5, color: PAPER_QUIET, lineHeight: 1.5 }}>
         Price and volume: dxLink candles via /proxy/option-history. Quote and greeks: TastyTrade, refreshed every 30s. OI, IV and net GEX: the
-        snapshots your watchlist records. Walls and CB: the scanner's 15 minute log. Analytics, not advice.
+        snapshots your watchlist records. Volt and Reversal: computed here from the full option chain (net GEX on OI + volume, every strike),
+        the same rule CB Edge uses for its CB. Analytics, not advice.
       </div>
     </section>
   );
@@ -560,15 +643,54 @@ function EmptyDossier({ watch }: { watch: WatchState }) {
   );
 }
 
-function Stat({ k, v, s, color }: { k: string; v: string; s?: string; color?: string }) {
+function Tile({ k, v, s, color }: { k: string; v: string | null; s?: string; color?: string }) {
   return (
-    <div style={{ minWidth: 0 }}>
+    <div className="cd-tile">
       <div style={{ ...labelStyle }}>{k}</div>
-      <div style={{ ...numStyle, fontWeight: 700, fontSize: 16, color: color ?? PAPER, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{v}</div>
-      {s && <div style={{ fontSize: 11.5, color: PAPER_QUIET, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s}</div>}
+      <div style={{ ...numStyle, fontWeight: 700, fontSize: 18, lineHeight: 1.2, marginTop: 5, color: v == null ? PAPER_QUIET : color ?? PAPER, overflowWrap: "anywhere" }}>
+        {v ?? "n/a"}
+      </div>
+      <div style={{ fontSize: 11.5, lineHeight: 1.35, color: PAPER_QUIET, marginTop: 3, minHeight: 15 }}>{s ?? "\u00a0"}</div>
     </div>
   );
 }
+
+function LevelCell({ k, spot, color }: { k: number | null; spot: number | null; color: string }) {
+  if (k == null) return <td><Quiet /></td>;
+  return (
+    <td>
+      <div style={{ color, fontWeight: 700, fontSize: 13 }}>{fmtK(k)}</div>
+      {spot != null && <div style={{ fontSize: 10.5, color: PAPER_QUIET, marginTop: 2 }}>{fmtSigned((k / spot - 1) * 100, 1)}<span className="cd-fs"> from spot</span></div>}
+    </td>
+  );
+}
+
+const Quiet = () => <span style={{ color: PAPER_QUIET }}>none</span>;
+
+type BookKey = "contract" | "front" | "all";
+const BOOKS: BookKey[] = ["contract", "front", "all"];
+
+const mdOf = (day: string) => fmtMD(Date.parse(`${day}T16:00:00Z`));
+
+function bookTitle(bk: BookKey, set: VoltSet | null, chain: ChainLevels | null | undefined): string {
+  if (bk === "contract") return "This contract's expiry";
+  if (bk === "front") return set?.expiry && set.expiry !== todayEt() ? "Nearest expiry" : "0DTE";
+  return chain?.expiries ? `All ${chain.expiries} expirations` : "All expirations";
+}
+
+function bookSub(bk: BookKey, set: VoltSet | null, chain: ChainLevels | null | undefined, c: Contract): string {
+  if (bk === "contract") return mdOf(c.expiry);
+  if (bk === "front") {
+    if (!set?.expiry) return "today";
+    return set.expiry === todayEt() ? `${mdOf(set.expiry)} · expires today` : `${mdOf(set.expiry)} · no expiry today`;
+  }
+  return chain?.expiries ? "summed per strike" : "";
+}
+
+const vsVolt = (d: number) => (Math.abs(d) < 1e-6 ? "at the Volt" : `${d > 0 ? "+" : "−"}${fmtK(Math.abs(d))} pts ${d > 0 ? "above" : "below"}`);
+
+/** 420 → "420", 22.5 → "22.5" */
+const fmtK = (k: number) => (k % 1 ? String(+k.toFixed(2)) : k.toFixed(0));
 
 function Shimmer({ text }: { text: string }) {
   return (
@@ -578,15 +700,22 @@ function Shimmer({ text }: { text: string }) {
   );
 }
 
-/** 0.12 → ".12", -0.09 → "−.09": the greeks fit one stat cell. */
-const greek = (v: number | null) => (v == null ? "·" : `${v < 0 ? "−" : ""}${Math.abs(v).toFixed(2).replace(/^0/, "")}`);
+/** 0.12 → "0.12", -0.09 → "−0.09"; null stays null so the tile says n/a. */
+const greek = (v: number | null) => (v == null ? null : `${v < 0 ? "−" : ""}${Math.abs(v).toFixed(Math.abs(v) < 0.01 && v !== 0 ? 3 : 2)}`);
 
 const tone = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? PAPER : v >= 0 ? GOOD : BAD);
 
 const CSS = `
 .cd-wrap{display:grid;grid-template-columns:420px minmax(0,1fr);gap:18px;align-items:start}
-.cd-stats{display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(0,1.15fr) minmax(0,1fr) minmax(0,.8fr) minmax(0,1.2fr) minmax(0,1fr);gap:14px 18px;align-items:end;margin-top:14px}
-.cd-ctx{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 18px;margin-top:10px}
+.cd-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:14px}
+.cd-ctx{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+.cd-tile{background:${INK};border:1px solid ${LINE};border-radius:${R_MD}px;padding:10px 12px;min-width:0}
+.cd-lv{width:100%;border-collapse:collapse;min-width:560px}
+.cd-lv th{font-family:${MONO};font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:${PAPER_QUIET};text-align:right;padding:8px 10px;border-bottom:1px solid ${LINE};white-space:nowrap}
+.cd-lv td{font-family:${MONO};font-variant-numeric:tabular-nums;font-size:12.5px;color:${PAPER};text-align:right;padding:9px 10px;border-bottom:1px solid ${LINE};white-space:nowrap;vertical-align:top}
+.cd-lv tbody tr:hover td{background:${rgba(ACCENT, 0.06)}}
+.cd-lv tr.on td{background:${rgba(ACCENT, 0.12)}}
+.cd-lv tr.on td:first-child{box-shadow:inset 2px 0 0 ${ACCENT}}
 .cd-table{width:100%;border-collapse:collapse}
 .cd-table th{font-family:${MONO};font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:${PAPER_QUIET};text-align:right;padding:9px 8px;border-bottom:1px solid ${LINE};white-space:nowrap}
 .cd-table td{font-family:${MONO};font-variant-numeric:tabular-nums;font-size:12px;color:${PAPER};text-align:right;padding:10px 8px;border-bottom:1px solid ${LINE};white-space:nowrap}
@@ -595,11 +724,14 @@ const CSS = `
 .cd-table tr.on td:first-child{box-shadow:inset 2px 0 0 ${ACCENT}}
 @media (max-width:1100px){
   .cd-wrap{grid-template-columns:1fr}
-  .cd-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .cd-stats > div:first-child{grid-column:1 / -1}
 }
 @media (max-width:640px){
   .cd-stats,.cd-ctx{grid-template-columns:repeat(2,minmax(0,1fr))}
   .cd-dossier{padding:14px!important}
+  .cd-lv{min-width:0}
+  .cd-lv th:nth-child(n+4),.cd-lv td:nth-child(n+4){display:none}
+  .cd-lv th,.cd-lv td{padding-left:6px;padding-right:6px}
+  .cd-lv td:first-child{white-space:normal}
+  .cd-fs{display:none}
 }
 `;

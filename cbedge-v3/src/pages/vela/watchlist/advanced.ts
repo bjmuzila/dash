@@ -1034,19 +1034,22 @@ class AdvancedView {
     const stocks = this.finStocks()
     const rest = syms.filter((s) => resolveSym(s).kind !== 'stock')
     const table = el(doc, 'div', 'cb-wla-table cb-wla-fin')
-    table.style.setProperty('--cb-wla-cols', 'minmax(150px, 1.4fr) 96px 92px 72px 84px 110px 150px 80px 80px')
-    table.style.minWidth = '1100px'
+    // spacing (2026-10-10): the symbol column is fixed, not 1.4fr of what is left; the
+    // report's date and session share one stacked cell, so does the last report's
+    // move and date; the averages sit beside the last report, and the reaction chart
+    // closes the row and takes any spare width
+    table.style.setProperty('--cb-wla-cols', '210px 128px 76px 88px 96px 76px 76px minmax(170px, 1fr)')
+    table.style.minWidth = '1000px'
     const th = el(doc, 'div', 'cb-wla-tr cb-wla-th')
     for (const [label, cls] of [
       ['Symbol', 'sym'],
       ['Next report', ''],
-      ['When', ''],
       ['EPS est.', 'num'],
       ['Market cap', 'num'],
       ['Last report', 'num'],
-      ['Last 8 · old → new', 'rx'],
       ['Avg move', 'num'],
       ['Avg gap', 'num'],
+      ['Last 8 reports · old → new', 'rx'],
     ] as const)
       th.append(el(doc, 'span', `cb-wla-hc ${cls}`, label))
     table.append(th)
@@ -1065,25 +1068,24 @@ class AdvancedView {
       if (d && d !== sym) name.append(el(doc, 'small', '', d))
       symCell.append(this.logo(sym), name)
       const soon = nx ? nx.date === today : false
-      const next = el(doc, 'span', 'cb-wla-td')
-      if (nx) next.append(el(doc, 'span', `cb-wla-erdate${soon ? ' hot' : ''}`, soon ? 'Today' : `${WEEKDAY.format(Date.parse(`${nx.date}T12:00:00Z`))} ${fDate(nx.date)}`))
+      const next = el(doc, 'span', 'cb-wla-td cb-wla-two')
+      if (nx) next.append(el(doc, 'span', `cb-wla-erdate${soon ? ' hot' : ''}`, soon ? 'Today' : `${WEEKDAY.format(Date.parse(`${nx.date}T12:00:00Z`))} ${fDate(nx.date)}`), el(doc, 'small', 'muted', sessionWord(nx.session).toLowerCase()))
       else next.append(el(doc, 'span', 'muted', 'not in 2 wks'))
       const last = mv?.[0]
-      const lastCell = el(doc, 'span', 'cb-wla-td num')
-      if (last && last.day != null) lastCell.append(el(doc, 'span', tone(last.day), fPct(last.day)), el(doc, 'small', 'muted', ` ${fDate(last.date)}`))
-      else lastCell.textContent = '·'
+      const lastCell = el(doc, 'span', 'cb-wla-td num cb-wla-two')
+      if (last && last.day != null) lastCell.append(el(doc, 'span', tone(last.day), fPct(last.day)), el(doc, 'small', 'muted', fDate(last.date)))
+      else lastCell.append(el(doc, 'span', 'muted', '·'))
       const am = avgAbs((mv ?? []).map((x) => x.day))
       const ag = avgAbs((mv ?? []).map((x) => x.gap))
       row.append(
         symCell,
         next,
-        el(doc, 'span', 'cb-wla-td', nx ? sessionWord(nx.session) : ''),
         el(doc, 'span', 'cb-wla-td num', nx?.epsEst ?? '·'),
         el(doc, 'span', 'cb-wla-td num', nx?.marketCap ? `$${compact(nx.marketCap)}` : '·'),
         lastCell,
-        reactionBars(doc, (mv ?? []).map((x) => x.day), rxScale),
         el(doc, 'span', 'cb-wla-td num strong', am == null ? '·' : `±${am.toFixed(1)}%`),
         el(doc, 'span', 'cb-wla-td num muted', ag == null ? '·' : `±${ag.toFixed(1)}%`),
+        reactionBars(doc, (mv ?? []).map((x) => x.day), rxScale),
       )
       row.addEventListener('click', () => (narrow() ? this.openOnChart(sym) : this.select(sym)))
       if (sym === this.finSelected()) row.dataset.sel = '1'

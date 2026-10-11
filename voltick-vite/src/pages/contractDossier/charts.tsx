@@ -16,10 +16,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import {
-  ACCENT, ACCENT_TEXT, BAD, ELEV, GOOD, INK, LINE, MONO, PAPER, PAPER_QUIET, SKY, SURGE, VOLT,
-  VOLT_MARK, WALL_MARK, labelStyle,
+  ACCENT, ACCENT_TEXT, BAD, ELEV, GOOD, INK, LINE, MONO, PAPER, PAPER_QUIET, REVERSAL, REVERSAL_MARK, SKY, VOLT,
+  VOLT_MARK, labelStyle,
 } from "../../theme";
-import type { Bar, Levels, WatchSnapshot } from "./data";
+import type { Bar, WatchSnapshot } from "./data";
 import { fmtCount, fmtMD, fmtMDT, fmtPx } from "./data";
 
 const AXIS_W = 56; // right-hand price axis
@@ -324,12 +324,11 @@ export function XAxis({ tl, daily }: { tl: Timeline; daily: boolean }) {
 
 /* ── where the strike sits ────────────────────────────────────────────────── */
 
-export function LevelRuler({ levels, spot, strike, width }: { levels: Levels | null; spot: number | null; strike: number; width: number }) {
+export function LevelRuler({ volt, reversal, spot, strike, width }: { volt: number | null; reversal: number | null; spot: number | null; strike: number; width: number }) {
   type M = { v: number; label: string; color: string; mark?: string; up: boolean };
   const marks: M[] = [];
-  if (levels?.putWall) marks.push({ v: levels.putWall, label: `Put wall ${fmtLvl(levels.putWall)}`, color: SURGE, mark: WALL_MARK, up: false });
-  if (levels?.cb) marks.push({ v: levels.cb, label: `CB ${fmtLvl(levels.cb)}`, color: VOLT, mark: VOLT_MARK, up: false });
-  if (levels?.callWall) marks.push({ v: levels.callWall, label: `Call wall ${fmtLvl(levels.callWall)}`, color: SURGE, mark: WALL_MARK, up: false });
+  if (volt != null) marks.push({ v: volt, label: `Volt ${fmtLvl(volt)}`, color: VOLT, mark: VOLT_MARK, up: false });
+  if (reversal != null) marks.push({ v: reversal, label: `Reversal ${fmtLvl(reversal)}`, color: REVERSAL, mark: REVERSAL_MARK, up: false });
   marks.push({ v: strike, label: `${fmtLvl(strike)} your strike`, color: ACCENT_TEXT, up: true });
   const vals = [...marks.map((m) => m.v), ...(spot ? [spot] : [])];
   let lo = Math.min(...vals);
@@ -355,6 +354,11 @@ export function LevelRuler({ levels, spot, strike, width }: { levels: Levels | n
     lastX = x;
   }
   const ticks = niceTicks(lo, hi, 6);
+  // a label near either end is anchored to that end so it is never cut off
+  const anchor = (x: number, chars: number) => {
+    const half = (chars * 6.4) / 2;
+    return x - half < 2 ? "start" : x + half > width - 2 ? "end" : "middle";
+  };
   return (
     <svg width={width} height={104} style={{ display: "block" }} role="img" aria-label="Where the strike sits against the levels">
       <line x1={L} x2={R} y1={yLine} y2={yLine} stroke={LINE} strokeWidth={2} />
@@ -371,7 +375,7 @@ export function LevelRuler({ levels, spot, strike, width }: { levels: Levels | n
         return (
           <g key={m.label}>
             <line x1={x} x2={x} y1={yLine - 10} y2={yLine + 10} stroke={m.color} strokeWidth={2} />
-            <text x={x} y={ty} textAnchor="middle" fill={m.color} {...T} fontSize={10.5} fontWeight={700}>
+            <text x={x} y={ty} textAnchor={anchor(x, m.label.length + (m.mark ? 2 : 0))} fill={m.color} {...T} fontSize={10.5} fontWeight={700}>
               {m.mark ? `${m.mark} ` : ""}{m.label}
             </text>
           </g>
@@ -380,7 +384,7 @@ export function LevelRuler({ levels, spot, strike, width }: { levels: Levels | n
       {spot != null && (
         <g>
           <circle cx={X(spot)} cy={yLine} r={6} fill={PAPER} stroke={ELEV} strokeWidth={2} />
-          <text x={X(spot)} y={yLine - 12} textAnchor="middle" fill={PAPER} {...T} fontSize={10.5} fontWeight={700}>
+          <text x={X(spot)} y={yLine - 12} textAnchor={anchor(X(spot), 6 + fmtPx(spot).length)} fill={PAPER} {...T} fontSize={10.5} fontWeight={700}>
             spot {fmtPx(spot)}
           </text>
         </g>
